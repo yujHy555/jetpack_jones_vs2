@@ -25,6 +25,11 @@ export class SceneManager {
   private shakeIntensity: number = 0;
   private shakeDuration: number = 0;
 
+  // Level 3 Triple-AAA Car Follow Camera State
+  private carCamHeading: number = 0;
+  private carCamOrbitOffset: number = 0;
+  private carCamLookAt: THREE.Vector3 = new THREE.Vector3();
+  private carCamInit: boolean = false;
   // Level 2 Cinematic Lock-On Shoot Framing (3rd-Person Temporary Enemy Alignment)
   private cinematicFocusTimer: number = 0;
   private cinematicTarget: THREE.Vector3 = new THREE.Vector3();
@@ -61,10 +66,9 @@ export class SceneManager {
     this.scene.background = new THREE.Color(0x1b1620);
     this.scene.fog = null;
 
-    // Camera setup - locked horizontal perspective for 2.5D platformer
-    // Pulled back (Z = 17.5) for spacious panoramic view of the levels and flight areas
+    // Camera setup - spacious panoramic frustum (far = 420 prevents any far-clipping across Level 3's 220m x 220m proving ground!)
     const aspect = window.innerWidth / window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(46, aspect, 0.1, 140);
+    this.camera = new THREE.PerspectiveCamera(46, aspect, 0.25, 420);
     this.camera.position.set(0, 0, this.baseZ);
 
     // Triple-AAA Orthographic Camera for Level 2 Isometric/Tactical View
@@ -135,6 +139,21 @@ export class SceneManager {
     try {
       const loader = new RGBELoader();
       const hdr = await loader.loadAsync('/hdri/nowhere_road_2k.hdr');
+      // Lower the equirectangular HDRI horizon uniformly 360° around (~20° down) so much more sky is visible!
+      if (hdr.image && hdr.image.data && hdr.image.width > 0 && hdr.image.height > 0) {
+        const w = hdr.image.width;
+        const h = hdr.image.height;
+        const src = hdr.image.data as unknown as Uint16Array | Float32Array;
+        const rowStride = w * 4;
+        const shiftRows = Math.round(h * 0.032); // Subtle 3.2% (~5.8°) horizon adjustment for natural open sky!
+        const shifted = new (src.constructor as new (len: number) => Uint16Array | Float32Array)(src.length);
+        for (let y = 0; y < h; y++) {
+          const srcY = Math.max(0, y - shiftRows);
+          shifted.set(src.subarray(srcY * rowStride, (srcY + 1) * rowStride), y * rowStride);
+        }
+        (hdr.image as unknown as { data: Uint16Array | Float32Array }).data = shifted;
+        hdr.needsUpdate = true;
+      }
       hdr.mapping = THREE.EquirectangularReflectionMapping;
       this.levelHdrTexture = hdr;
 
@@ -399,15 +418,21 @@ export class SceneManager {
     this.scene.fog = null;
 
     if (lvl === 3) {
-      this.scene.environmentIntensity = 0.85;
-      this.ambientLight.color.setHex(0xffeedd);
-      this.ambientLight.intensity = 2.6;
-      this.keyLight.color.setHex(0xffaa85);
-      this.keyLight.intensity = 1.8;
-      this.keyLight.castShadow = false;
-      this.renderer.shadowMap.autoUpdate = false;
-      this.rimLight.color.setHex(0x44ccff);
-      this.rimLight.intensity = 1.2;
+      // Level 3 Car Testing Ground: Crisp outdoor proving-ground sun + real-time PCFSoftShadowMap car shadows!
+      this.scene.environmentIntensity = 0.45;
+      this.ambientLight.color.setHex(0xdce8ff);
+      this.ambientLight.intensity = 0.44;
+      this.keyLight.color.setHex(0xfff4dc);
+      this.keyLight.intensity = 2.85;
+      this.keyLight.castShadow = true;
+      this.renderer.shadowMap.autoUpdate = true;
+      this.keyLight.shadow.bias = -0.0004;
+      this.keyLight.shadow.normalBias = 0.022;
+      this.rimLight.color.setHex(0x88ccff);
+      this.rimLight.intensity = 0.36;
+      this.carCamInit = false;
+      this.carCamHeading = 0;
+      this.carCamOrbitOffset = 0;
     } else if (lvl === 2) {
       // High-contrast Triple-AAA sun/ambient balance + restrained IBL so Jones never glows & his cast shadow is rich & dark!
       this.scene.environmentIntensity = 0.30;
@@ -637,9 +662,118 @@ export class SceneManager {
     }
   }
 
+  /**
+   * Level 3 Next-Gen Triple-AAA 3rd-Person Arcade Car Follow Camera:
+   * - Dynamically blends car heading + velocity direction so sweeping drifts showcase the side profile & tire smoke!
+   * - Dynamic speed-reactive FOV (48° -> 62°) for exhilarating turbo acceleration!
+   * - Smooth spring chase arm with optional mouse/right-stick orbit that gracefully auto-recenters!
+   */
+  public updateCameraCarFollow(
+    carX: number,
+    carY: number,
+    carZ: number,
+    carHeading: number,
+    velX: number,
+    velZ: number,
+    driftAmount: number,
+    isBoosting: boolean,
+    dt: number,
+    orbitDeltaX: number = 0,
+    rightStickX: number = 0
+  ) {
+    const safeDt = Math.min(dt, 0.05);
+    const speed = Math.hypot(velX, velZ);
+
+    // Optional manual orbit offset (auto-recenters smoothly when driving)
+    if (Math.abs(orbitDeltaX) > 0.001 || Math.abs(rightStickX) > 0.04) {
+      this.carCamOrbitOffset -= orbitDeltaX * 0.007 + rightStickX * safeDt * 2.2;
+    } else if (speed > 2.5) {
+      this.carCamOrbitOffset = THREE.MathUtils.lerp(this.carCamOrbitOffset, 0, Math.min(1, safeDt * 2.4));
+    }
+
+    // Blend car nose heading with actual travel direction during high-speed drifts!
+    let targetYaw = carHeading;
+    if (speed > 6.0) {
+      const velHeading = Math.atan2(velX, velZ);
+      let diffVel = ((velHeading - carHeading + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+      // Only blend forward velocity (don't flip camera backward when reversing!)
+      if (Math.abs(diffVel) < Math.PI * 0.65) {
+        targetYaw = carHeading + diffVel * (0.42 + driftAmount * 0.28);
+      }
+    }
+
+    if (!this.carCamInit) {
+      this.carCamHeading = targetYaw;
+    } else {
+      let yawDiff = ((targetYaw - this.carCamHeading + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+      const followRate = 4.2 + Math.min(speed * 0.08, 2.8);
+      this.carCamHeading += yawDiff * Math.min(1, safeDt * followRate);
+    }
+
+    const camYaw = this.carCamHeading + this.carCamOrbitOffset;
+    const speedRatio = THREE.MathUtils.clamp(speed / 38.0, 0, 1);
+
+    // Dynamic chase distance & height (pulls slightly back & lower on high-speed turbo runs!)
+    const chaseDist = 8.4 + speedRatio * 1.4 + (isBoosting ? 0.8 : 0);
+    const chaseHeight = 3.25 + speedRatio * 0.25;
+
+    const goalX = carX - Math.sin(camYaw) * chaseDist;
+    const goalY = carY + chaseHeight;
+    const goalZ = carZ - Math.cos(camYaw) * chaseDist;
+
+    // Look slightly ahead of the car nose for clear cornering sightlines
+    const lookAhead = 2.6 + speedRatio * 2.2;
+    const wantLookX = carX + Math.sin(carHeading) * lookAhead;
+    const wantLookY = carY + 1.15;
+    const wantLookZ = carZ + Math.cos(carHeading) * lookAhead;
+
+    if (!this.carCamInit) {
+      this.camera.position.set(goalX, goalY, goalZ);
+      this.carCamLookAt.set(wantLookX, wantLookY, wantLookZ);
+      this.carCamInit = true;
+    } else {
+      const posLerp = Math.min(1, safeDt * 9.5);
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, goalX, posLerp);
+      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, goalY, posLerp);
+      this.camera.position.z = THREE.MathUtils.lerp(this.camera.position.z, goalZ, posLerp);
+
+      const lookLerp = Math.min(1, safeDt * 12.0);
+      this.carCamLookAt.x = THREE.MathUtils.lerp(this.carCamLookAt.x, wantLookX, lookLerp);
+      this.carCamLookAt.y = THREE.MathUtils.lerp(this.carCamLookAt.y, wantLookY, lookLerp);
+      this.carCamLookAt.z = THREE.MathUtils.lerp(this.carCamLookAt.z, wantLookZ, lookLerp);
+    }
+
+    // Dynamic Speed FOV (48° -> 62°)
+    const targetFov = 48 + speedRatio * 10.5 + (isBoosting ? 4.5 : 0);
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1, safeDt * 6.5));
+      this.camera.updateProjectionMatrix();
+    }
+
+    // Subtle high-speed / drift rumble shake
+    if (this.shakeDuration > 0) {
+      this.shakeDuration -= safeDt;
+      this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
+      this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;
+    }
+
+    this.camera.lookAt(this.carCamLookAt);
+
+    // Keep real-time shadow camera centered tightly around the car!
+    this.keyLight.position.set(carX + 8, carY + 20, carZ + 10);
+    this.keyLight.target.position.set(carX, carY, carZ);
+    this.keyLight.target.updateMatrixWorld();
+
+    this.pixelClock += safeDt;
+    this.pixelArtBlend = this.pixelArtEnabled ? 1.0 : 0.0;
+    if (this.pixelArtFlash > 0) {
+      this.pixelArtFlash = Math.max(0, this.pixelArtFlash - safeDt * 5.0);
+    }
+  }
+
   public render(isHangar: boolean = false) {
-    // Enable real-time shadow map updates in Level 2 & Hangar; bypass completely in Level 1 for max FPS!
-    this.renderer.shadowMap.autoUpdate = isHangar || this.currentLevel === 2;
+    // Enable real-time shadow map updates in Level 2, Level 3 & Hangar; bypass completely in Level 1 for max FPS!
+    this.renderer.shadowMap.autoUpdate = isHangar || this.currentLevel === 2 || this.currentLevel === 3;
     const activeCam = this.getActiveCamera(isHangar);
     // 0.00ms overhead bypass when BOTH Pixel-Art Shader and Hangar DOF are OFF!
     if (!this.pixelArtEnabled && !this.dofEnabled) {

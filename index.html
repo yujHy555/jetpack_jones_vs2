@@ -1734,6 +1734,34 @@
         transition: all 0.15s ease;
       ">🔊 AUDIO ON</button>
 
+      <!-- Level 3 Retro-Arcade Car Speedometer & Drift Boost HUD (Positioned cleanly top-right below toolbar — NEVER overlaps any buttons!) -->
+      <div id="car-hud" style="
+        display: none;
+        position: fixed;
+        top: 96px;
+        right: 16px;
+        z-index: 9500;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 5px;
+        padding: 10px 14px;
+        background: rgba(16, 12, 10, 0.86);
+        border: 2px solid #ff9e44;
+        border-radius: 10px;
+        box-shadow: 0 0 18px rgba(255, 158, 68, 0.35);
+        font-family: 'Share Tech Mono', monospace;
+        pointer-events: none;
+      ">
+        <div style="display:flex;align-items:baseline;gap:6px;">
+          <span id="car-speed-val" style="font-size:34px;font-weight:700;color:#ffffff;text-shadow:0 0 10px #ff9e44;line-height:1;">000</span>
+          <span style="font-size:12px;color:#ff9e44;letter-spacing:1px;">KM/H</span>
+        </div>
+        <div style="width:140px;height:8px;background:rgba(255,255,255,0.14);border-radius:4px;overflow:hidden;border:1px solid rgba(255,158,68,0.45);">
+          <div id="car-drift-fill" style="width:0%;height:100%;background:linear-gradient(90deg,#ff7f2a,#ffe033);transition:width 0.06s linear;"></div>
+        </div>
+        <div style="font-size:10px;color:#a6ff38;letter-spacing:0.6px;">WASD/RT: DRIVE • SPACE/B: DRIFT • SHIFT: TURBO</div>
+      </div>
+
       <!-- 1979 Retro-Space Preloader Overlay (Blocks jerky startup until all assets & shaders are ready!) -->
       <div id="boot-preloader" style="
         position: fixed;

@@ -116,8 +116,8 @@ export class LevelGenerator {
       this.level1FinishGate.visible = this.currentLevel === 1;
     }
 
-    if (this.currentLevel === 2) {
-      // Level 2 is now the dedicated 3D Free-Roam Sandbox (Level2FreeRoam.ts) — no legacy 2D obstacles!
+    if (this.currentLevel === 2 || this.currentLevel === 3) {
+      // Level 2 = 3D Free-Roam Sandbox; Level 3 = Arcade Drift Car Testing Ground — no legacy 2D obstacles!
       return;
     }
 
@@ -189,8 +189,8 @@ export class LevelGenerator {
   }
 
   public update(playerX: number) {
-    // Level 2 uses dedicated 3D Free-Roam stage (Level2FreeRoam.ts)
-    if (this.currentLevel === 2) return;
+    // Level 2 (3D Free-Roam) & Level 3 (Arcade Car Testing Ground) use dedicated arenas
+    if (this.currentLevel === 2 || this.currentLevel === 3) return;
 
     const maxSpawnX = this.currentLevel === 1 ? (this.level1EndX - 14) : Infinity;
     while (this.nextSpawnX < playerX + 65 && this.nextSpawnX <= maxSpawnX) {
@@ -223,10 +223,13 @@ export class LevelGenerator {
   }
 
   // --------------------------------------------------------
-  // LEVEL 1: INDUSTRIAL COMPLEX GENERATOR
+  // LEVEL 1: INDUSTRIAL COMPLEX GENERATOR (100% Deterministic Fixed Layout!)
   // --------------------------------------------------------
   private generateChunkLevel1(x: number) {
-    const pattern = Math.floor(Math.random() * 8);
+    // Fixed handcrafted pattern order so Level 1 is ALWAYS identical on boot, retry & level switch!
+    const fixedOrder = [0, 1, 2, 4, 3];
+    const chunkIdx = Math.max(0, Math.round((x - 22) / this.spawnInterval));
+    const pattern = fixedOrder[chunkIdx % fixedOrder.length];
 
     switch (pattern) {
       case 0:

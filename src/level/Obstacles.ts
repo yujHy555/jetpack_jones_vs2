@@ -1474,6 +1474,7 @@ export class ObstacleManager {
     miniWings.position.set(0, -0.04, 0);
     group.add(miniWings);
 
+    group.scale.setScalar(0.52);
     this.scene.add(group);
 
     const pickup: ActivePickup = {
@@ -1481,7 +1482,7 @@ export class ObstacleManager {
       type: PickupType.JETPACK_UPGRADE,
       mesh: group,
       position: group.position,
-      radius: 0.65,
+      radius: 0.55,
       active: true,
       update: (dt: number, time: number) => {
         group.position.y = y + Math.sin(time * 3.5) * 0.18;
@@ -1707,14 +1708,15 @@ export class ObstacleManager {
     ring2.rotation.y = Math.PI / 3;
     ringGroup.add(ring2);
 
-    this.scene.add(group);
+      group.scale.setScalar(0.46);
+      this.scene.add(group);
 
     const pickup: ActivePickup = {
       id: this.nextId++,
       type: PickupType.FUEL,
       mesh: group,
       position: group.position,
-      radius: 0.65,
+      radius: 0.52,
       active: true,
       update: (dt: number, time: number) => {
         // Continuous axial rotation and hovering bob
@@ -1830,6 +1832,7 @@ export class ObstacleManager {
     const halo = new THREE.Mesh(haloGeo, haloMat);
     group.add(halo);
 
+    group.scale.setScalar(0.45);
     this.scene.add(group);
 
     const pickup: ActivePickup = {
@@ -1837,7 +1840,7 @@ export class ObstacleManager {
       type: PickupType.COIN,
       mesh: group,
       position: group.position,
-      radius: 0.55,
+      radius: 0.48,
       active: true,
       update: (dt: number, time: number) => {
         // Outer medallion spins clockwise

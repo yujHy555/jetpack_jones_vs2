@@ -14,6 +14,23 @@ export class AudioManager {
   private isThrusting: boolean = false;
   private isHoverMode: boolean = false;
 
+  // Next-Gen Triple-AAA Level 3 Car Audio Synthesizer Nodes
+  private carNodesReady: boolean = false;
+  private carOscSub: OscillatorNode | null = null;
+  private carOscMain: OscillatorNode | null = null;
+  private carOscHarm: OscillatorNode | null = null;
+  private carIdleLfo: OscillatorNode | null = null;
+  private carIdleLfoGain: GainNode | null = null;
+  private carEngineFilter: BiquadFilterNode | null = null;
+  private carEngineGain: GainNode | null = null;
+  private carTurboOsc: OscillatorNode | null = null;
+  private carTurboGain: GainNode | null = null;
+  private carScreechFilter1: BiquadFilterNode | null = null;
+  private carScreechFilter2: BiquadFilterNode | null = null;
+  private carScreechGain: GainNode | null = null;
+  private carRumbleGain: GainNode | null = null;
+  private carPrevGear: number = 1;
+
   constructor() {
     // Unlock AudioContext on initial browser user interaction
     const unlockAudio = () => {
@@ -1104,5 +1121,324 @@ export class AudioManager {
     gain.connect(this.outputNode);
     osc.start(t);
     osc.stop(t + 0.25);
+  }
+
+  /**
+   * Initializes persistent zero-click WebAudio graph for the Level 3 Arcade Drift Car:
+   * - Multi-harmonic V8 muscle/sport idle + RPM synth with dynamic resonant low-pass filter & 7.2Hz idle cam lope
+   * - Spooling turbocharger whine
+   * - Dual-bandpass resonant tire screech / hard-brake squeal
+   * - Raised FIA curb rumble-strip thump
+   */
+  private initCarAudioGraph() {
+    if (this.carNodesReady || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // Ensure shared noise buffer exists
+    if (!this.sharedNoiseBuffer) {
+      const len = Math.floor(this.ctx.sampleRate * 2.0);
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      this.sharedNoiseBuffer = buf;
+    }
+
+    // 1. Multi-harmonic Engine Core
+    this.carEngineFilter = this.ctx.createBiquadFilter();
+    this.carEngineFilter.type = 'lowpass';
+    this.carEngineFilter.frequency.setValueAtTime(220, t);
+    this.carEngineFilter.Q.setValueAtTime(2.6, t);
+
+    this.carEngineGain = this.ctx.createGain();
+    this.carEngineGain.gain.setValueAtTime(0.0001, t);
+
+    this.carOscSub = this.ctx.createOscillator();
+    this.carOscSub.type = 'triangle';
+    this.carOscSub.frequency.setValueAtTime(42, t);
+    const subMix = this.ctx.createGain();
+    subMix.gain.setValueAtTime(0.65, t);
+    this.carOscSub.connect(subMix);
+    subMix.connect(this.carEngineFilter);
+
+    this.carOscMain = this.ctx.createOscillator();
+    this.carOscMain.type = 'sawtooth';
+    this.carOscMain.frequency.setValueAtTime(56, t);
+    const mainMix = this.ctx.createGain();
+    mainMix.gain.setValueAtTime(0.42, t);
+    this.carOscMain.connect(mainMix);
+    mainMix.connect(this.carEngineFilter);
+
+    this.carOscHarm = this.ctx.createOscillator();
+    this.carOscHarm.type = 'sawtooth';
+    this.carOscHarm.frequency.setValueAtTime(112, t);
+    const harmMix = this.ctx.createGain();
+    harmMix.gain.setValueAtTime(0.24, t);
+    this.carOscHarm.connect(harmMix);
+    harmMix.connect(this.carEngineFilter);
+
+    // Subtle 7.2 Hz V8 idle cam-lope modulation on filter cutoff
+    this.carIdleLfo = this.ctx.createOscillator();
+    this.carIdleLfo.type = 'sine';
+    this.carIdleLfo.frequency.setValueAtTime(7.2, t);
+    this.carIdleLfoGain = this.ctx.createGain();
+    this.carIdleLfoGain.gain.setValueAtTime(38, t);
+    this.carIdleLfo.connect(this.carIdleLfoGain);
+    this.carIdleLfoGain.connect(this.carEngineFilter.frequency);
+
+    this.carEngineFilter.connect(this.carEngineGain);
+    this.carEngineGain.connect(this.outputNode);
+
+    this.carOscSub.start(t);
+    this.carOscMain.start(t);
+    this.carOscHarm.start(t);
+    this.carIdleLfo.start(t);
+
+    // 2. Spooling Turbocharger Whine
+    this.carTurboOsc = this.ctx.createOscillator();
+    this.carTurboOsc.type = 'sine';
+    this.carTurboOsc.frequency.setValueAtTime(720, t);
+    this.carTurboGain = this.ctx.createGain();
+    this.carTurboGain.gain.setValueAtTime(0.0001, t);
+    this.carTurboOsc.connect(this.carTurboGain);
+    this.carTurboGain.connect(this.outputNode);
+    this.carTurboOsc.start(t);
+
+    // 3. Realistic Gritty Asphalt Tire-Scrub + Brake/Handbrake Bite (NO synthetic high-pitched whistle!)
+    const screechSrc = this.ctx.createBufferSource();
+    screechSrc.buffer = this.sharedNoiseBuffer;
+    screechSrc.loop = true;
+
+    // Layer A: Heavy low-mid rubber-on-tarmac scrub roar (420-680 Hz, broad Q = 1.4)
+    this.carScreechFilter1 = this.ctx.createBiquadFilter();
+    this.carScreechFilter1.type = 'bandpass';
+    this.carScreechFilter1.frequency.setValueAtTime(520, t);
+    this.carScreechFilter1.Q.setValueAtTime(1.4, t);
+
+    // Layer B: Authentic warm street-tire bark/chirp (960-1280 Hz, moderate Q = 3.4)
+    this.carScreechFilter2 = this.ctx.createBiquadFilter();
+    this.carScreechFilter2.type = 'bandpass';
+    this.carScreechFilter2.frequency.setValueAtTime(1040, t);
+    this.carScreechFilter2.Q.setValueAtTime(3.4, t);
+
+    const scrubMix = this.ctx.createGain();
+    scrubMix.gain.setValueAtTime(0.85, t);
+    const chirpMix = this.ctx.createGain();
+    chirpMix.gain.setValueAtTime(0.45, t);
+
+    this.carScreechGain = this.ctx.createGain();
+    this.carScreechGain.gain.setValueAtTime(0.0001, t);
+
+    screechSrc.connect(this.carScreechFilter1);
+    screechSrc.connect(this.carScreechFilter2);
+    this.carScreechFilter1.connect(scrubMix);
+    this.carScreechFilter2.connect(chirpMix);
+    scrubMix.connect(this.carScreechGain);
+    chirpMix.connect(this.carScreechGain);
+    this.carScreechGain.connect(this.outputNode);
+    screechSrc.start(t);
+
+    // 4. Raised FIA Curb Rumble-Strip Thump
+    const rumbleSrc = this.ctx.createBufferSource();
+    rumbleSrc.buffer = this.sharedNoiseBuffer;
+    rumbleSrc.loop = true;
+    const rumbleLp = this.ctx.createBiquadFilter();
+    rumbleLp.type = 'bandpass';
+    rumbleLp.frequency.setValueAtTime(98, t);
+    rumbleLp.Q.setValueAtTime(2.2, t);
+    this.carRumbleGain = this.ctx.createGain();
+    this.carRumbleGain.gain.setValueAtTime(0.0001, t);
+    rumbleSrc.connect(rumbleLp);
+    rumbleLp.connect(this.carRumbleGain);
+    this.carRumbleGain.connect(this.outputNode);
+    rumbleSrc.start(t);
+
+    this.carNodesReady = true;
+  }
+
+  public updateCarAudio(
+    active: boolean,
+    speedKmh: number,
+    throttle: number,
+    brake: number,
+    driftAmount: number,
+    isBoosting: boolean,
+    onCurbIntensity: number,
+    isAirborne: boolean = false
+  ) {
+    if (!active || !this.enabled) {
+      this.stopCarAudio();
+      return;
+    }
+    this.initCtx();
+    if (!this.ctx) return;
+    if (!this.carNodesReady) this.initCarAudioGraph();
+    if (!this.carEngineGain || !this.carEngineFilter || !this.carOscSub || !this.carOscMain || !this.carOscHarm) return;
+
+    const t = this.ctx.currentTime;
+    const spd = Math.max(0, speedKmh);
+
+    // Simulated 5-speed automatic transmission for authentic sports-car RPM sweep!
+    let gear = 1;
+    let gearMin = 0, gearMax = 38;
+    if (spd > 125) { gear = 5; gearMin = 115; gearMax = 175; }
+    else if (spd > 92) { gear = 4; gearMin = 84; gearMax = 135; }
+    else if (spd > 62) { gear = 3; gearMin = 54; gearMax = 100; }
+    else if (spd > 34) { gear = 2; gearMin = 28; gearMax = 68; }
+
+    if (gear > this.carPrevGear && throttle > 0.3) {
+      this.playExhaustPop();
+    }
+    this.carPrevGear = gear;
+
+    const gearNorm = Math.max(0, Math.min(1, (spd - gearMin) / Math.max(1, gearMax - gearMin)));
+    const revBoost = isAirborne && throttle > 0.2 ? 0.35 : 0;
+    const rpmNorm = Math.min(1.15, 0.08 + gearNorm * 0.78 + throttle * 0.16 + (isBoosting ? 0.15 : 0) + revBoost);
+
+    // Rich V8 idle purr (~40-56 Hz) ramping smoothly into high-RPM scream (~160-240 Hz)
+    const baseFreq = 44 + rpmNorm * 138;
+    this.carOscSub.frequency.setTargetAtTime(baseFreq * 0.52, t, 0.045);
+    this.carOscMain.frequency.setTargetAtTime(baseFreq, t, 0.04);
+    this.carOscHarm.frequency.setTargetAtTime(baseFreq * 1.98, t, 0.04);
+
+    // Idle cam-lope strong at standstill, smooths out cleanly at higher RPM
+    const idleFactor = Math.max(0, 1.0 - spd / 22.0);
+    if (this.carIdleLfo && this.carIdleLfoGain) {
+      this.carIdleLfo.frequency.setTargetAtTime(7.2 + rpmNorm * 14.0, t, 0.05);
+      this.carIdleLfoGain.gain.setTargetAtTime(idleFactor * 44.0 + 10.0, t, 0.06);
+    }
+
+    // Dynamic filter opens dramatically when you floor the throttle or hit turbo!
+    const cutoff = 185 + rpmNorm * 680 + throttle * 420 + (isBoosting ? 550 : 0);
+    this.carEngineFilter.frequency.setTargetAtTime(cutoff, t, 0.045);
+
+    const engVol = 0.095 + throttle * 0.075 + rpmNorm * 0.055 + (isBoosting ? 0.04 : 0);
+    this.carEngineGain.gain.setTargetAtTime(engVol, t, 0.05);
+
+    // Spooling Turbo Whine
+    if (this.carTurboOsc && this.carTurboGain) {
+      const turboFreq = 680 + rpmNorm * 1450 + (isBoosting ? 520 : 0);
+      const turboVol = (throttle > 0.25 || isBoosting) ? (0.008 + rpmNorm * 0.022 + (isBoosting ? 0.032 : 0)) : 0.0001;
+      this.carTurboOsc.frequency.setTargetAtTime(turboFreq, t, 0.06);
+      this.carTurboGain.gain.setTargetAtTime(turboVol, t, 0.07);
+    }
+
+    // Realistic Gritty Asphalt Brake Scrub & Handbrake Tire Bark
+    if (this.carScreechGain && this.carScreechFilter1 && this.carScreechFilter2) {
+      const hardBrake = (brake > 0.30 && spd > 14 && !isAirborne) ? Math.min(1, (spd - 12) / 55) * 0.68 : 0;
+      const slipAudio = isAirborne ? 0 : Math.max(driftAmount, hardBrake);
+      const screechVol = slipAudio > 0.16 && spd > 8 ? Math.min(0.28, (slipAudio - 0.14) * 0.32) : 0.0001;
+      // Lower, meatier rubber-on-asphalt scrub during normal braking; sharper bark during high-speed handbrake drift!
+      const isBrakingOnly = hardBrake > driftAmount;
+      const f1 = isBrakingOnly ? (420 + Math.min(160, spd * 1.1)) : (540 + Math.min(220, spd * 1.5));
+      const f2 = isBrakingOnly ? (820 + Math.min(180, spd * 1.2)) : (1020 + Math.min(340, spd * 2.2) + slipAudio * 140);
+      this.carScreechFilter1.frequency.setTargetAtTime(f1, t, 0.05);
+      this.carScreechFilter2.frequency.setTargetAtTime(f2, t, 0.05);
+      this.carScreechGain.gain.setTargetAtTime(screechVol, t, 0.04);
+    }
+
+    // Raised FIA Curb Rumble-Strip Thump
+    if (this.carRumbleGain) {
+      const rumbleVol = (!isAirborne && onCurbIntensity > 0.05 && spd > 5)
+        ? Math.min(0.32, onCurbIntensity * (0.14 + Math.min(1, spd / 80) * 0.18))
+        : 0.0001;
+      this.carRumbleGain.gain.setTargetAtTime(rumbleVol, t, 0.03);
+    }
+  }
+
+  public stopCarAudio() {
+    if (!this.carNodesReady || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.carEngineGain?.gain.setTargetAtTime(0.0001, t, 0.04);
+    this.carTurboGain?.gain.setTargetAtTime(0.0001, t, 0.04);
+    this.carScreechGain?.gain.setTargetAtTime(0.0001, t, 0.04);
+    this.carRumbleGain?.gain.setTargetAtTime(0.0001, t, 0.04);
+  }
+
+  private playExhaustPop() {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(130, t);
+    osc.frequency.exponentialRampToValueAtTime(38, t + 0.08);
+    g.gain.setValueAtTime(0.14, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    osc.connect(g);
+    g.connect(this.outputNode);
+    osc.start(t);
+    osc.stop(t + 0.10);
+  }
+
+  public playConeHit(impactSpeed: number = 12) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const vol = Math.min(0.28, 0.08 + impactSpeed * 0.007);
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(240 + Math.random() * 80, t);
+    osc.frequency.exponentialRampToValueAtTime(75, t + 0.09);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+    osc.connect(g);
+    g.connect(this.outputNode);
+    osc.start(t);
+    osc.stop(t + 0.11);
+  }
+
+  public playCarLand(impactSpeed: number = 6) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const intensity = Math.min(1.0, Math.max(0.25, impactSpeed / 12.0));
+
+    // 1. Deep Heavy Suspension Bottom-Out Thud
+    const sub = this.ctx.createOscillator();
+    const subG = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(118 + intensity * 35, t);
+    sub.frequency.exponentialRampToValueAtTime(26, t + 0.22);
+    subG.gain.setValueAtTime(0.45 * intensity, t);
+    subG.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+    sub.connect(subG);
+    subG.connect(this.outputNode);
+    sub.start(t);
+    sub.stop(t + 0.25);
+
+    // 2. Chassis Frame Compression Punch
+    const punch = this.ctx.createOscillator();
+    const punchG = this.ctx.createGain();
+    punch.type = 'triangle';
+    punch.frequency.setValueAtTime(185, t);
+    punch.frequency.exponentialRampToValueAtTime(52, t + 0.11);
+    punchG.gain.setValueAtTime(0.26 * intensity, t);
+    punchG.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    punch.connect(punchG);
+    punchG.connect(this.outputNode);
+    punch.start(t);
+    punch.stop(t + 0.13);
+
+    // 3. Underbody Metal Scrape & Spark Sizzle on Asphalt!
+    if (this.sharedNoiseBuffer) {
+      const nSrc = this.ctx.createBufferSource();
+      nSrc.buffer = this.sharedNoiseBuffer;
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'bandpass';
+      hp.frequency.setValueAtTime(2400, t);
+      hp.frequency.exponentialRampToValueAtTime(950, t + 0.22);
+      hp.Q.setValueAtTime(1.6, t);
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.28 * intensity, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.23);
+      nSrc.connect(hp);
+      hp.connect(ng);
+      ng.connect(this.outputNode);
+      nSrc.start(t);
+      nSrc.stop(t + 0.24);
+    }
   }
 }

@@ -13,6 +13,8 @@ import { EnemyBlob } from './entities/EnemyBlob';
 import { HangarCustomizer } from './ui/HangarCustomizer';
 import { JetpackModelId } from './entities/MixamoCharacterRig';
 import { Level2FreeRoam } from './level/Level2FreeRoam';
+import { Level3CarArena } from './level/Level3CarArena';
+import { ArcadeCarRig } from './entities/ArcadeCarRig';
 import { MicroDebrisVFX } from './entities/MicroDebrisVFX';
 
 enum GameState {
@@ -32,6 +34,12 @@ class Game {
   private levelGenerator: LevelGenerator;
   private pixelPortalManager: PixelPortalManager;
   private level2FreeRoam: Level2FreeRoam;
+  private level3CarArena: Level3CarArena;
+  private arcadeCar: ArcadeCarRig;
+  private carHudEl: HTMLElement | null = null;
+  private carSpeedEl: HTMLElement | null = null;
+  private carDriftBarEl: HTMLElement | null = null;
+  private lastCarSpeedShown: number = -1;
   private level2EnemiesSpawned: boolean = false;
   private level2DroneSlots: { x: number; y: number; z: number; patrol: number; drone: any; respawnTimer: number }[] = [];
   private microDebris: MicroDebrisVFX;
@@ -125,6 +133,15 @@ class Game {
     this.hangarCustomizer.onLand = (impact) => this.audioManager.playGroundLanding(impact);
     this.hangarCustomizer.onCrtStatic = (dur) => this.audioManager.playCrtStaticNoise(dur);
     this.level2FreeRoam = new Level2FreeRoam(this.sceneManager.scene);
+    this.level3CarArena = new Level3CarArena(this.sceneManager.scene);
+    this.arcadeCar = new ArcadeCarRig(this.sceneManager.scene);
+    this.arcadeCar.onLand = (impactSpd) => {
+      this.audioManager.playCarLand(impactSpd);
+      this.sceneManager.triggerShake(Math.min(0.28, impactSpd * 0.022), 0.16);
+    };
+    this.carHudEl = document.getElementById('car-hud');
+    this.carSpeedEl = document.getElementById('car-speed-val');
+    this.carDriftBarEl = document.getElementById('car-drift-fill');
     this.microDebris = new MicroDebrisVFX(this.sceneManager.scene);
     this.obstacleManager.onBulletImpact = (x, y, color) => {
       if (this.levelGenerator.currentLevel !== 2) {
@@ -321,7 +338,8 @@ class Game {
     const levelBtn = document.getElementById('btn-level');
     if (levelBtn) {
       levelBtn.addEventListener('click', () => {
-        const nextLevel = this.levelGenerator.currentLevel === 1 ? 2 : 1;
+        const cur = this.levelGenerator.currentLevel;
+        const nextLevel = cur === 1 ? 2 : (cur === 2 ? 3 : 1);
         this.switchLevel(nextLevel);
       });
     }
@@ -346,12 +364,26 @@ class Game {
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyL') {
-        const nextLevel = this.levelGenerator.currentLevel === 1 ? 2 : 1;
+        const cur = this.levelGenerator.currentLevel;
+        const nextLevel = cur === 1 ? 2 : (cur === 2 ? 3 : 1);
         this.switchLevel(nextLevel);
       }
     });
 
     (window as any).__game = this;
+  }
+
+  private alignLevel1PixelPortalsOnce() {
+    this.pixelPortalManager.reset(0);
+    const staticBlockers = this.obstacleManager.obstacles
+      .filter((obs) => obs.active && obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL)
+      .map((obs) => ({
+        x: obs.group.position.x,
+        y: obs.group.position.y,
+        halfW: obs.collider.halfSize ? obs.collider.halfSize.x : (obs.collider.radius ?? 0.8),
+        halfH: obs.collider.halfSize ? obs.collider.halfSize.y : (obs.collider.radius ?? 0.8)
+      }));
+    this.pixelPortalManager.ensureClearOfPlatforms(this.obstacleManager.getPlatforms(), staticBlockers, -9999);
   }
 
   public showMainMenu() {
@@ -363,12 +395,22 @@ class Game {
     this.level1Completed = false;
     this.sceneManager.setLevel(1);
     this.levelGenerator.setLevel(1);
+    this.alignLevel1PixelPortalsOnce();
     this.parallaxLayers.setLevel(1);
     this.player.setFreeRoamAimMode(false);
     this.parallaxLayers.group.visible = true;
     this.pixelPortalManager.setVisible(true);
     this.obstacleManager.setAllVisible(true);
     this.level2FreeRoam.setVisible(false);
+    this.level3CarArena.setVisible(false);
+    this.arcadeCar.setVisible(false);
+    this.audioManager.stopCarAudio();
+    this.player.mesh.visible = true;
+    if (this.carHudEl) this.carHudEl.style.display = 'none';
+    if (this.sceneManager.camera.fov !== 46) {
+      this.sceneManager.camera.fov = 46;
+      this.sceneManager.camera.updateProjectionMatrix();
+    }
     this.levelGenerator.setFinishGateVisible(true);
     this.hangarCustomizer.runwayComputersGroup.visible = true;
     this.sceneManager.setPixelArtMode(false, false);
@@ -876,13 +918,38 @@ class Game {
     this.player.isIsometric = false;
 
     const isLevel2 = lvl === 2;
+    const isLevel3 = lvl === 3;
+    const isLevel1 = lvl === 1;
     this.player.setFreeRoamAimMode(isLevel2);
-    this.parallaxLayers.group.visible = !isLevel2;
-    this.pixelPortalManager.setVisible(!isLevel2);
-    this.obstacleManager.setAllVisible(!isLevel2);
+    this.player.mesh.visible = !isLevel3;
+    this.parallaxLayers.group.visible = isLevel1;
+    this.pixelPortalManager.setVisible(isLevel1);
+    this.obstacleManager.setAllVisible(isLevel1);
     this.level2FreeRoam.setVisible(isLevel2);
-    this.levelGenerator.setFinishGateVisible(!isLevel2);
-    this.hangarCustomizer.runwayComputersGroup.visible = !isLevel2;
+    this.level3CarArena.setVisible(isLevel3);
+    this.arcadeCar.setVisible(isLevel3);
+    if (this.carHudEl) this.carHudEl.style.display = isLevel3 ? 'flex' : 'none';
+    this.levelGenerator.setFinishGateVisible(isLevel1);
+    this.hangarCustomizer.runwayComputersGroup.visible = isLevel1;
+
+    if (isLevel3) {
+      if (this.player.shieldActive) this.toggleForcefield();
+      this.meteorManager.reset(); // Eliminate any suspended Level 1 meteors in Level 3!
+      this.arcadeCar.reset(0, 0, 0);
+      this.level3CarArena.resetCones();
+      this.audioManager.setJetpackThrust(false);
+    } else {
+      if (isLevel2) this.meteorManager.reset();
+      this.audioManager.stopCarAudio();
+      if (this.sceneManager.camera.fov !== 46) {
+        this.sceneManager.camera.fov = 46;
+        this.sceneManager.camera.updateProjectionMatrix();
+      }
+    }
+    const shieldBtnEl = document.getElementById('btn-shield');
+    if (shieldBtnEl) shieldBtnEl.style.display = isLevel3 ? 'none' : '';
+    const ffModeBtnEl = document.getElementById('btn-forcefield-mode');
+    if (ffModeBtnEl) ffModeBtnEl.style.display = isLevel3 ? 'none' : '';
 
     // Hold Level 2 enemies back until Jones explores past x >= 21.5 (after Conveyor & 30° Ramp!)
     this.level2EnemiesSpawned = false;
@@ -895,6 +962,7 @@ class Game {
 
     // Spawn Jones directly on the Moving Conveyor Belt in Level 2 (y = -3.56, z = 0)!
     this.player.reset(0, isLevel2 ? -3.56 : -3.70, 0);
+    if (isLevel3) this.player.mesh.visible = false;
     this.score = 0;
 
     const camViewBtn = document.getElementById('btn-cam-view');
@@ -906,10 +974,11 @@ class Game {
     }
     const l2PixelBtn = document.getElementById('btn-l2-pixel');
     if (l2PixelBtn) {
-      l2PixelBtn.style.display = isLevel2 ? '' : 'none';
+      l2PixelBtn.style.display = (isLevel2 || isLevel3) ? '' : 'none';
       l2PixelBtn.textContent = this.sceneManager.pixelArtEnabled ? '👾 PIXEL: ON' : '👾 PIXEL: OFF';
     }
-    if (!isLevel2) {
+    if (isLevel1) {
+      this.alignLevel1PixelPortalsOnce();
       this.sceneManager.resetLevel1Camera(0, -3.70);
     }
 
@@ -919,6 +988,10 @@ class Game {
         levelBtn.textContent = '🪐 LEVEL 2: 3D FREE ROAM [L]';
         levelBtn.style.color = '#38d2ff';
         levelBtn.style.borderColor = '#2574e8';
+      } else if (lvl === 2) {
+        levelBtn.textContent = '🏎️ LEVEL 3: DRIFT CAR [L]';
+        levelBtn.style.color = '#ff9e44';
+        levelBtn.style.borderColor = '#ff7f2a';
       } else {
         levelBtn.textContent = '🏭 LEVEL 1: RUNWAY [L]';
         levelBtn.style.color = '#39ff14';
@@ -928,12 +1001,15 @@ class Game {
 
     const optLevelBtn = document.getElementById('opt-level-btn');
     if (optLevelBtn) {
-      optLevelBtn.textContent = isLevel2 ? '🚀 LEVEL 2: 3D FREE ROAM' : '🏭 LEVEL 1: INDUSTRIAL';
+      optLevelBtn.textContent = isLevel3
+        ? '🏎️ LEVEL 3: CAR TESTING GROUND'
+        : (isLevel2 ? '🚀 LEVEL 2: 3D FREE ROAM' : '🏭 LEVEL 1: INDUSTRIAL');
     }
 
     let levelName = 'LEVEL 1: INDUSTRIAL RUNWAY';
     if (isLevel2) levelName = 'LEVEL 2: 3D FREE ROAM · CONVEYOR & 30° RAMP [V: CAM]';
-    this.showUpgradeBanner(`★ SWITCHED TO ${levelName} ★`);
+    if (isLevel3) levelName = 'LEVEL 3: ARCADE DRIFT CAR TESTING GROUND · WASD/RT DRIVE · SPACE/B DRIFT · SHIFT TURBO';
+    this.showUpgradeBanner(`★ ${levelName} ★`);
   }
 
   private showUpgradeBanner(msg: string) {
@@ -991,15 +1067,7 @@ class Game {
       ];
     }
     if (this.levelGenerator.currentLevel === 1) {
-      const staticBlockers = this.obstacleManager.obstacles
-        .filter((obs) => obs.active && obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL)
-        .map((obs) => ({
-          x: obs.group.position.x,
-          y: obs.group.position.y,
-          halfW: obs.collider.halfSize ? obs.collider.halfSize.x : (obs.collider.radius ?? 0.8),
-          halfH: obs.collider.halfSize ? obs.collider.halfSize.y : (obs.collider.radius ?? 0.8)
-        }));
-      this.pixelPortalManager.ensureClearOfPlatforms(this.obstacleManager.getPlatforms(), staticBlockers, -9999);
+      this.alignLevel1PixelPortalsOnce();
     }
     this.sceneManager.setPixelArtMode(false, false);
     this.player.setPixelMode(false);
@@ -1114,7 +1182,8 @@ class Game {
     const totalTime = this.clock.getElapsedTime();
 
     const isLevel2 = this.state === GameState.PLAYING && this.levelGenerator.currentLevel === 2;
-    this.inputManager.update(isLevel2);
+    const isLevel3 = this.state === GameState.PLAYING && this.levelGenerator.currentLevel === 3;
+    this.inputManager.update(isLevel2 || isLevel3);
     // Project mouse cursor to 3D world plane
     this.inputManager.updateAimWorldTarget(
       this.sceneManager.camera,
@@ -1126,8 +1195,11 @@ class Game {
     if (this.state === GameState.PLAYING) {
       // Guarantee shooting/movement input is ALWAYS active whenever PLAYING (never stuck false after switchLevel!)
       this.inputManager.gameplayInputEnabled = true;
-      // Post-start shoot lockout guarantees player NEVER shoots automatically on load/start
-      if (this.startShootLockout > 0) {
+      // Post-start shoot lockout guarantees player NEVER shoots automatically on load/start (and NO shooting in Level 3 car scene!)
+      if (isLevel3) {
+        this.inputManager.consumeShootTrigger();
+        this.inputManager.consumeShieldTrigger();
+      } else if (this.startShootLockout > 0) {
         this.startShootLockout = Math.max(0, this.startShootLockout - rawDt);
         this.inputManager.consumeShootTrigger();
       } else if (this.inputManager.consumeShootTrigger()) {
@@ -1162,8 +1234,8 @@ class Game {
         this.showUpgradeBanner(mode === 'orthographic' ? '📐 ORTHOGRAPHIC CAMERA ACTIVE' : '🎥 3RD-PERSON FOLLOW CAMERA ACTIVE');
       }
 
-      // Force Field Toggle ([B] key)
-      if (this.inputManager.consumeShieldTrigger()) {
+      // Force Field Toggle ([B] key — disabled in Level 3 car scene!)
+      if (!isLevel3 && this.inputManager.consumeShieldTrigger()) {
         this.toggleForcefield();
       }
 
@@ -1174,6 +1246,69 @@ class Game {
 
       if (this.player.fuel < 18 && this.player.fuel > 0 && Math.sin(totalTime * 8) > 0.8) {
         this.audioManager.playWarning();
+      }
+
+      // LEVEL 3: TRIPLE-AAA ARCADE DRIFT CAR TESTING GROUND!
+      if (isLevel3) {
+        this.audioManager.setJetpackThrust(false);
+        const carIn = this.inputManager.getCarInput();
+        this.arcadeCar.update(
+          dt,
+          carIn,
+          this.sceneManager.camera.position,
+          this.level3CarArena.arenaLimit,
+          (wx, wz) => this.level3CarArena.getSurfaceInfo(wx, wz),
+          (px, py, pz, nx, nz, heading) => this.level3CarArena.resolveCarHorizontal(px, py, pz, nx, nz, heading)
+        );
+        this.level3CarArena.updateCones(
+          dt,
+          this.arcadeCar.position.x,
+          this.arcadeCar.position.y,
+          this.arcadeCar.position.z,
+          this.arcadeCar.heading,
+          this.arcadeCar.velX,
+          this.arcadeCar.velZ,
+          (impactSpd) => this.audioManager.playConeHit(impactSpd)
+        );
+        this.audioManager.updateCarAudio(
+          true,
+          this.arcadeCar.speedKmh,
+          carIn.throttle,
+          carIn.brake,
+          this.arcadeCar.driftAmount,
+          this.arcadeCar.boostTimer > 0,
+          this.arcadeCar.onCurbIntensity,
+          this.arcadeCar.isAirborne
+        );
+        const mouseOrbit = this.inputManager.consumeMouseOrbitDelta();
+        const rsX = this.inputManager.hasGamepadAim ? this.inputManager.rightStickAimX : 0;
+        this.sceneManager.updateCameraCarFollow(
+          this.arcadeCar.position.x,
+          this.arcadeCar.position.y,
+          this.arcadeCar.position.z,
+          this.arcadeCar.heading,
+          this.arcadeCar.velX,
+          this.arcadeCar.velZ,
+          this.arcadeCar.driftAmount,
+          this.arcadeCar.boostTimer > 0,
+          dt,
+          mouseOrbit.dx,
+          rsX
+        );
+        if (this.carSpeedEl && this.arcadeCar.speedKmh !== this.lastCarSpeedShown) {
+          this.lastCarSpeedShown = this.arcadeCar.speedKmh;
+          this.carSpeedEl.textContent = String(this.arcadeCar.speedKmh).padStart(3, '0');
+        }
+        if (this.carDriftBarEl) {
+          const pct = Math.round(Math.max(this.arcadeCar.driftCharge, this.arcadeCar.boostTimer > 0 ? 1 : 0) * 100);
+          this.carDriftBarEl.style.width = `${pct}%`;
+          this.carDriftBarEl.style.background = this.arcadeCar.boostTimer > 0
+            ? 'linear-gradient(90deg, #00f5ff, #ffffff)'
+            : 'linear-gradient(90deg, #ff7f2a, #ffe033)';
+        }
+        this.hud.update(this.score, this.player.life, this.player.fuel);
+        this.sceneManager.render(false);
+        return;
       }
 
       // 3. Update Player Entity

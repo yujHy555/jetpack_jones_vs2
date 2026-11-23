@@ -75,6 +75,9 @@ export class ParallaxLayers {
   private foregroundConsoles: THREE.Group[] = [];
   private foreground1979Props: { group: THREE.Group; baseX: number }[] = [];
   private crtScreenMats: THREE.ShaderMaterial[] = [];
+  private bgJetGroup: THREE.Group | null = null;
+  private bgJetMat: THREE.MeshBasicMaterial | null = null;
+  private bgJetSmokeMat: THREE.ShaderMaterial | null = null;
   private droneCitySignTex!: THREE.CanvasTexture;
   private dofVeilPlane!: THREE.Mesh;
 
@@ -102,8 +105,10 @@ export class ParallaxLayers {
     // All background elements removed so the nowhere_road_2k HDRI shines cleanly across the entire background!
     this.createSeamlessCatwalkBridge();
     this.createPinkFlamingoMotelSign();
+    this.createMilitaryWatchtowers();
     this.createPublicToiletsMidLandmark();
     this.createTransitHubEndStation();
+    this.createDistantPinkFlamingoJet();
     this.createForegroundTerminalConsoles();
   }
 
@@ -115,10 +120,12 @@ export class ParallaxLayers {
     const loader = new THREE.TextureLoader();
     const tex = loader.load('/textures/pink_flamingo_motel.png');
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 4;
 
     const signHeight = 7.2;
-    const aspect = 853 / 960;
+    const aspect = 682 / 768;
     const signWidth = signHeight * aspect;
 
     const mat = new THREE.MeshBasicMaterial({
@@ -137,6 +144,45 @@ export class ParallaxLayers {
   }
 
   /**
+   * "MILITARY WATCHTOWER — SECTOR 04" transparent retro sci-fi guard towers (shared single GPU texture + geometry!)
+   * 1. Left of the Pink Flamingo sign at start of Level 1 (x = -12.6)
+   * 2. Standing guard just as you approach the final Level 1 exit gate (x = 112.5)
+   */
+  private createMilitaryWatchtowers() {
+    const loader = new THREE.TextureLoader();
+    const tex = loader.load('/textures/military_watchtower.png');
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 4;
+
+    const towerHeight = 8.4;
+    const aspect = 684 / 768;
+    const towerWidth = towerHeight * aspect;
+
+    const sharedGeo = new THREE.PlaneGeometry(towerWidth, towerHeight);
+    const sharedMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      alphaTest: 0.12,
+      side: THREE.DoubleSide,
+      depthWrite: true
+    });
+
+    // Tower 1: Further left of Pink Flamingo sign at start of Level 1 (generous spacing clear of initial view)
+    const towerStart = new THREE.Mesh(sharedGeo, sharedMat);
+    towerStart.name = 'MilitaryWatchtowerStart';
+    towerStart.position.set(-16.8, -3.70 + towerHeight * 0.5, -2.20);
+    this.group.add(towerStart);
+
+    // Tower 2: Just before the final Level 1 Finish Gate (x = 120)
+    const towerEnd = new THREE.Mesh(sharedGeo, sharedMat);
+    towerEnd.name = 'MilitaryWatchtowerApproach';
+    towerEnd.position.set(112.5, -3.70 + towerHeight * 0.5, -2.35);
+    this.group.add(towerEnd);
+  }
+
+  /**
    * "PUBLIC TOILETS / MUNICIPAL RESTROOMS" transparent retro sci-fi landmark
    * positioned cleanly in the middle of Level 1 (x = 60.0, z = -2.35) behind the runway
    * so it never obscures or touches any platforms, portals, or obstacles, with its base flush on GROUND_Y (-3.70)!
@@ -145,10 +191,12 @@ export class ParallaxLayers {
     const loader = new THREE.TextureLoader();
     const tex = loader.load('/textures/public_toilets.png');
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 4;
 
     const h = 6.2;
-    const aspect = 916 / 994;
+    const aspect = 708 / 768;
     const w = h * aspect;
 
     const mat = new THREE.MeshBasicMaterial({
@@ -173,10 +221,12 @@ export class ParallaxLayers {
     const loader = new THREE.TextureLoader();
     const tex = loader.load('/textures/transit_hub_sector7.png');
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 4;
 
     const hubHeight = 5.8;
-    const aspect = 997 / 529;
+    const aspect = 768 / 407;
     const hubWidth = hubHeight * aspect;
 
     const mat = new THREE.MeshBasicMaterial({
@@ -192,6 +242,132 @@ export class ParallaxLayers {
     // Seated flush on GROUND_Y (-3.70) at the end of Level 1 right beside the Finish Gate (x = 120)
     hubMesh.position.set(124.5, -3.70 + hubHeight * 0.5, -1.95);
     this.group.add(hubMesh);
+  }
+
+  /**
+   * Distant "THE PINK FLAMINGO" Retro Jet — crisp, small & far in the background (z = -42),
+   * gliding cleanly from off-screen right to off-screen left every 30 seconds with a custom
+   * animated GPU turbulent afterburner + billowing contrail smoke shader!
+   */
+  private createDistantPinkFlamingoJet() {
+    const loader = new THREE.TextureLoader();
+    const tex = loader.load('/textures/pink_flamingo_jet.png');
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 8;
+
+    const jetW = 7.4;
+    const jetH = jetW * (251 / 768);
+
+    const jetGroup = new THREE.Group();
+    jetGroup.name = 'DistantPinkFlamingoJet';
+
+    const jetMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      alphaTest: 0.04,
+      opacity: 1.0,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    this.bgJetMat = jetMat;
+    const jetMesh = new THREE.Mesh(new THREE.PlaneGeometry(jetW, jetH), jetMat);
+    jetGroup.add(jetMesh);
+
+    // Custom Single-Draw-Call GPU Billowing Jet Exhaust & Contrail Shader
+    const smokeMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uOpacity: { value: 1.0 }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        uniform float uTime;
+        uniform float uOpacity;
+        varying vec2 vUv;
+
+        float hash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        float noise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          float a = hash(i);
+          float b = hash(i + vec2(1.0, 0.0));
+          float c = hash(i + vec2(0.0, 1.0));
+          float d = hash(i + vec2(1.0, 1.0));
+          return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        }
+        float fbm(vec2 p) {
+          float v = 0.0;
+          float amp = 0.52;
+          for (int i = 0; i < 4; i++) {
+            v += amp * noise(p);
+            p *= 2.08;
+            amp *= 0.5;
+          }
+          return v;
+        }
+
+        void main() {
+          // vUv.x = 0 right at the turbine nozzle, vUv.x = 1 far downstream
+          float x = vUv.x;
+          // Jet plume widens smoothly as smoke billows behind the aircraft
+          float halfWidth = mix(0.075, 0.44, pow(x, 0.72));
+          // Gentle aerodynamic vortex wave along the trail
+          float wave = sin(x * 16.0 - uTime * 9.5) * 0.045 * x;
+          float dy = abs((vUv.y - 0.5) - wave);
+
+          // Fast-scrolling billowing cloud turbulence
+          vec2 nUv = vec2(x * 7.5 - uTime * 4.8, (vUv.y - 0.5) * 3.8);
+          float turb = fbm(nUv);
+          float puffEdge = halfWidth * (0.72 + turb * 0.65);
+
+          float coreMask = smoothstep(puffEdge, puffEdge * 0.15, dy);
+          // Smooth nozzle entry + long wispy tail fade-out
+          float lengthMask = smoothstep(0.0, 0.04, x) * pow(1.0 - x, 1.35);
+
+          // Incandescent hot amber-cyan turbine jet core right at the exhaust
+          float flameMask = exp(-x * 18.0) * smoothstep(0.14, 0.01, dy);
+          float flameFlicker = 0.85 + 0.15 * sin(uTime * 42.0 + x * 30.0);
+
+          // Sunlit warm cream-white top of smoke plume, soft dusty-rose/lavender shadow underneath
+          float sunShade = smoothstep(0.25, 0.75, vUv.y + (turb - 0.5) * 0.3);
+          vec3 smokeCol = mix(vec3(0.86, 0.76, 0.82), vec3(1.0, 0.96, 0.92), sunShade);
+          vec3 flameCol = mix(vec3(1.0, 0.52, 0.18), vec3(1.0, 0.95, 0.75), exp(-x * 32.0));
+
+          vec3 col = mix(smokeCol, flameCol, clamp(flameMask * 1.4, 0.0, 1.0));
+          float alpha = clamp(coreMask * lengthMask * (0.58 + turb * 0.42) + flameMask * 0.95 * flameFlicker, 0.0, 0.92) * uOpacity;
+
+          if (alpha < 0.01) discard;
+          gl_FragColor = vec4(col, alpha);
+        }
+      `
+    });
+    smokeMat.customProgramCacheKey = () => 'DistantJetContrailV1';
+    this.bgJetSmokeMat = smokeMat;
+
+    const smokeMesh = new THREE.Mesh(new THREE.PlaneGeometry(24.0, 2.5), smokeMat);
+    // Attach directly behind the Pink Flamingo jet's rear turbine exhaust nozzle (+X side)
+    smokeMesh.position.set(jetW * 0.36 + 12.0, -0.04, -0.05);
+    jetGroup.add(smokeMesh);
+
+    jetGroup.position.set(0, 14.0, -42.0);
+    jetGroup.visible = false;
+    this.group.add(jetGroup);
+    this.bgJetGroup = jetGroup;
   }
 
   private initAestheticMaterials() {
@@ -1122,6 +1298,35 @@ export class ParallaxLayers {
     // (ZERO sliding, ZERO wrapping, ZERO teleporting while playing the level!)
     for (const mat of this.crtScreenMats) {
       mat.uniforms.uTime.value = time;
+    }
+
+    // 7. Distant Pink Flamingo Jet Flyby (far background z = -42, every 30 seconds, wide off-screen entry & exit!)
+    if (this.bgJetGroup) {
+      const cycle = (time + 26.0) % 30.0; // First pass begins at 4s, then repeats every exact 30s!
+      const flyDuration = 10.5;
+      if (cycle < flyDuration) {
+        const prog = cycle / flyDuration;
+        // Smooth atmospheric edge fade ONLY far off-screen so it NEVER cuts in or cuts out!
+        const fadeIn = THREE.MathUtils.smoothstep(prog, 0.0, 0.08);
+        const fadeOut = 1.0 - THREE.MathUtils.smoothstep(prog, 0.92, 1.0);
+        const edgeOpacity = fadeIn * fadeOut;
+
+        this.bgJetGroup.visible = true;
+        this.bgJetGroup.position.set(
+          playerX + THREE.MathUtils.lerp(92.0, -96.0, prog),
+          13.4 + Math.sin(prog * Math.PI) * 1.2 + alt * 0.12,
+          -42.0
+        );
+        // Subtle aerodynamic pitch along gentle sky arc
+        this.bgJetGroup.rotation.z = -Math.cos(prog * Math.PI) * 0.035;
+        if (this.bgJetMat) this.bgJetMat.opacity = edgeOpacity;
+        if (this.bgJetSmokeMat) {
+          this.bgJetSmokeMat.uniforms.uTime.value = time;
+          this.bgJetSmokeMat.uniforms.uOpacity.value = edgeOpacity;
+        }
+      } else {
+        this.bgJetGroup.visible = false;
+      }
     }
   }
 }

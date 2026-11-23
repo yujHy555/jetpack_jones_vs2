@@ -475,6 +475,47 @@ export class InputManager {
     return false;
   }
 
+  /**
+   * Level 3 Arcade Car Controls (Keyboard + Gamepad!)
+   * - Accelerate: W / ArrowUp / Gamepad RT (buttons[7]) or A (buttons[0])
+   * - Brake/Reverse: S / ArrowDown / Gamepad LT (buttons[6])
+   * - Steer: A/D / ArrowLeft/ArrowRight / Gamepad Left Stick X
+   * - Drift / Handbrake: Space / Gamepad B (buttons[1]) / RB (buttons[5]) / X (buttons[2])
+   * - Turbo Boost: Shift / KeyF / Gamepad Y (buttons[3]) / LB (buttons[4])
+   */
+  public getCarInput(): { throttle: number; brake: number; steer: number; drift: boolean; boost: boolean } {
+    let throttle = (this.keys['KeyW'] || this.keys['ArrowUp']) ? 1 : 0;
+    let brake = (this.keys['KeyS'] || this.keys['ArrowDown']) ? 1 : 0;
+    let steer = 0;
+    if (this.keys['KeyA'] || this.keys['ArrowLeft']) steer += 1;
+    if (this.keys['KeyD'] || this.keys['ArrowRight']) steer -= 1;
+    let drift = Boolean(this.keys['Space']);
+    let boost = Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.keys['KeyF']);
+
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const pad of pads) {
+      if (!pad || !pad.connected) continue;
+      const rt = pad.buttons[7]?.value ?? 0;
+      const lt = pad.buttons[6]?.value ?? 0;
+      if (rt > 0.08) throttle = Math.max(throttle, rt);
+      if (pad.buttons[0]?.pressed) throttle = 1;
+      if (lt > 0.08) brake = Math.max(brake, lt);
+      const lx = pad.axes[0] ?? 0;
+      if (Math.abs(lx) > 0.14) {
+        steer = THREE.MathUtils.clamp(-lx, -1, 1);
+      }
+      if (pad.buttons[1]?.pressed || pad.buttons[2]?.pressed || pad.buttons[5]?.pressed) {
+        drift = true;
+      }
+      if (pad.buttons[3]?.pressed || pad.buttons[4]?.pressed) {
+        boost = true;
+      }
+      break;
+    }
+
+    return { throttle, brake, steer, drift, boost };
+  }
+
   public consumeShootTrigger(): boolean {
     if (this.shootJustPressed) {
       this.shootJustPressed = false;
