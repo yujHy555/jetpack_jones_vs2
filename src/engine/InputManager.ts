@@ -29,6 +29,8 @@ export class InputManager {
   // Left-Mouse Drag Camera Rotation (Level 2 Free-Roam!)
   private isLeftMouseDown: boolean = false;
   private leftMouseDragged: boolean = false;
+  private leftMouseDownX: number = 0;
+  private leftMouseDownY: number = 0;
   private lastMouseDragX: number = 0;
   private lastMouseDragY: number = 0;
   public mouseOrbitDeltaX: number = 0;
@@ -136,9 +138,11 @@ export class InputManager {
         }
         this.isGamepadActive = false;
         if (this.isFreeRoam3D) {
-          // In Level 2 3D Free-Roam: Left-Mouse Drag rotates the camera; quick Left-Click shoots!
+          // In Level 2 3D Free-Roam: Left-Mouse Drag (>6px) rotates the camera; quick Left-Click shoots!
           this.isLeftMouseDown = true;
           this.leftMouseDragged = false;
+          this.leftMouseDownX = e.clientX;
+          this.leftMouseDownY = e.clientY;
           this.lastMouseDragX = e.clientX;
           this.lastMouseDragY = e.clientY;
         } else {
@@ -151,13 +155,15 @@ export class InputManager {
       if (!this.isLeftMouseDown || !this.isFreeRoam3D) return;
       const dx = e.clientX - this.lastMouseDragX;
       const dy = e.clientY - this.lastMouseDragY;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+      if (Math.hypot(e.clientX - this.leftMouseDownX, e.clientY - this.leftMouseDownY) > 6) {
         this.leftMouseDragged = true;
       }
       this.lastMouseDragX = e.clientX;
       this.lastMouseDragY = e.clientY;
-      this.mouseOrbitDeltaX += dx;
-      this.mouseOrbitDeltaY += dy;
+      if (this.leftMouseDragged) {
+        this.mouseOrbitDeltaX += dx;
+        this.mouseOrbitDeltaY += dy;
+      }
     });
 
     window.addEventListener('mouseup', (e) => {

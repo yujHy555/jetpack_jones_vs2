@@ -51,6 +51,13 @@ export class DroneEnemy {
   private shootTimer: number = 1.0;
   private jiggleTimer: number = 0;
 
+  // Dramatic Aerial Sky Drop-In Entrance State
+  private dropInActive: boolean = false;
+  private dropInDelay: number = 0;
+  private dropInStartY: number = 0;
+  private dropInElapsed: number = 0;
+  private dropInDuration: number = 1.45;
+
   // Projectiles & Death FX
   public lasers: DroneLaser[] = [];
   private scrapPool: ScrapParticle[] = [];
@@ -498,7 +505,29 @@ export class DroneEnemy {
     }
   }
 
-  public update(dt: number, time: number, playerX: number, playerY: number, groundY: number = -3.70) {
+  /**
+   * Launches a dramatic aerial drop-in entrance from high above the arena!
+   */
+  public triggerDropInFromAbove(dropHeight: number = 19.0, delay: number = 0, duration: number = 1.45) {
+    this.dropInActive = true;
+    this.dropInDelay = Math.max(0, delay);
+    this.dropInStartY = this.hoverBaseY + dropHeight;
+    this.dropInElapsed = 0;
+    this.dropInDuration = Math.max(0.4, duration);
+    this.position.y = this.dropInStartY;
+    this.group.visible = delay <= 0.001;
+    this.shootTimer = Math.max(this.shootTimer, delay + duration + 0.8);
+  }
+
+  public update(
+    dt: number,
+    time: number,
+    playerX: number,
+    playerY: number,
+    groundY: number = -3.70,
+    playerZ: number = 0,
+    is3D: boolean = false
+  ) {
     // A. Death Explosion FX (Spectacular visual animation)
     if (this.isDying) {
       if (this.deathTimer > 0) {
@@ -565,6 +594,31 @@ export class DroneEnemy {
       return;
     }
 
+    // A2. Dramatic Sky Drop-In Descent Entrance (swoops down from above & brakes smoothly into hover!)
+    if (this.dropInActive) {
+      if (this.dropInDelay > 0) {
+        this.dropInDelay = Math.max(0, this.dropInDelay - dt);
+        this.group.visible = false;
+        this.updateLasers(dt);
+        return;
+      }
+      this.group.visible = true;
+      this.dropInElapsed += dt;
+      const t = THREE.MathUtils.clamp(this.dropInElapsed / this.dropInDuration, 0, 1);
+      // Smooth cubic ease-out deceleration with slight aerodynamic dive bank
+      const easeOut = 1.0 - Math.pow(1.0 - t, 3.0);
+      this.position.y = THREE.MathUtils.lerp(this.dropInStartY, this.hoverBaseY, easeOut);
+      this.chassisMesh.rotation.z = (1.0 - easeOut) * 0.35;
+      this.chassisMesh.rotation.x = (1.0 - easeOut) * 0.22;
+      if (t >= 1.0) {
+        this.dropInActive = false;
+        this.chassisMesh.rotation.z = 0;
+        this.chassisMesh.rotation.x = 0;
+      }
+      this.updateLasers(dt);
+      return;
+    }
+
     // ----------------------------------------------------
     // B. AI Flight: Sine-wave Hovering & Pursuit
     // ----------------------------------------------------
@@ -574,26 +628,53 @@ export class DroneEnemy {
 
     const dx = playerX - this.position.x;
     const dy = (playerY + 1.2) - this.position.y;
-    const distToPlayer = Math.hypot(dx, dy);
+    const dz = is3D ? (playerZ - this.position.z) : 0;
+    const distToPlayer = Math.hypot(dx, dy, dz);
+    const detectRange = is3D ? 34.0 : 16.0;
+    const attackRange = is3D ? 28.0 : 14.0;
 
-    // Smooth pursuit when in range
-    if (distToPlayer < 16.0) {
-      // Approach comfortable tactical distance (~6 units)
-      const desiredX = playerX + (dx > 0 ? -5.5 : 5.5);
-      const targetSpeedX = THREE.MathUtils.clamp((desiredX - this.position.x) * 1.8, -4.5, 4.5);
-      this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, targetSpeedX, dt * 3.5);
+    // Smooth pursuit when in range (Full 3D pursuit in Level 2, 2D pursuit in Level 1!)
+    if (distToPlayer < detectRange) {
+      if (is3D) {
+        const horizDist = Math.max(0.001, Math.hypot(dx, dz));
+        const standOff = 7.5;
+        const desiredX = playerX - (dx / horizDist) * standOff;
+        const desiredZ = playerZ - (dz / horizDist) * standOff;
+        const targetSpeedX = THREE.MathUtils.clamp((desiredX - this.position.x) * 1.6, -5.2, 5.2);
+        const targetSpeedZ = THREE.MathUtils.clamp((desiredZ - this.position.z) * 1.6, -5.2, 5.2);
+        this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, targetSpeedX, dt * 3.5);
+        this.velocity.z = THREE.MathUtils.lerp(this.velocity.z, targetSpeedZ, dt * 3.5);
 
-      const targetFlyY = THREE.MathUtils.clamp(playerY + 2.0 + hoverOffset, groundY + 1.2, 8.0);
-      this.position.y = THREE.MathUtils.lerp(this.position.y, targetFlyY, dt * 2.5);
+        const targetFlyY = THREE.MathUtils.clamp(playerY + 2.2 + hoverOffset, groundY + 1.3, 8.5);
+        this.position.y = THREE.MathUtils.lerp(this.position.y, targetFlyY, dt * 2.5);
+
+        // Smoothly rotate visor/cannon directly toward Jones in 3D!
+        const targetYaw = Math.atan2(-dz, dx);
+        let yDiff = ((targetYaw - this.group.rotation.y + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+        this.group.rotation.y += yDiff * Math.min(1, dt * 6.0);
+      } else {
+        // Approach comfortable tactical distance (~5.5 units)
+        const desiredX = playerX + (dx > 0 ? -5.5 : 5.5);
+        const targetSpeedX = THREE.MathUtils.clamp((desiredX - this.position.x) * 1.8, -4.5, 4.5);
+        this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, targetSpeedX, dt * 3.5);
+        this.velocity.z = 0;
+
+        const targetFlyY = THREE.MathUtils.clamp(playerY + 2.0 + hoverOffset, groundY + 1.2, 8.0);
+        this.position.y = THREE.MathUtils.lerp(this.position.y, targetFlyY, dt * 2.5);
+      }
     } else {
       // Idle patrol
       const targetPatrolX = this.patrolX + Math.sin(this.flightPhase * 0.5) * this.patrolRange;
       const pSpeed = THREE.MathUtils.clamp((targetPatrolX - this.position.x) * 1.5, -3.0, 3.0);
       this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, pSpeed, dt * 3.0);
+      this.velocity.z = THREE.MathUtils.lerp(this.velocity.z, 0, dt * 3.0);
       this.position.y = THREE.MathUtils.lerp(this.position.y, targetY, dt * 2.0);
     }
 
     this.position.x += this.velocity.x * dt;
+    if (is3D) {
+      this.position.z += this.velocity.z * dt;
+    }
 
     // Organic Waving of Long White Tentacles
     for (let t = 0; t < this.tentacleChains.length; t++) {
@@ -644,17 +725,17 @@ export class DroneEnemy {
     // ----------------------------------------------------
     // D. Attack: Shoot Red Laser Bolts at Jones!
     // ----------------------------------------------------
-    if (distToPlayer < 14.0) {
+    if (distToPlayer < attackRange) {
       this.shootTimer -= dt;
       if (this.shootTimer <= 0) {
         this.shootTimer = this.shootCooldown + Math.random() * 0.8;
-        this.fireRedLaser(playerX, playerY + 0.9);
+        this.fireRedLaser(playerX, playerY + 0.9, is3D ? playerZ : 0, is3D);
       }
     }
 
     // Dynamic ground contact shadow decal
     if (this.shadowMesh) {
-      this.shadowMesh.position.set(this.position.x, groundY + 0.015, 0);
+      this.shadowMesh.position.set(this.position.x, groundY + 0.015, is3D ? this.position.z : 0);
       const heightAbove = Math.max(0, this.position.y - groundY);
       const sScale = Math.max(0.25, 1.0 - heightAbove * 0.12);
       this.shadowMesh.scale.set(sScale, sScale, sScale);
@@ -664,12 +745,12 @@ export class DroneEnemy {
     this.updateLasers(dt);
   }
 
-  private fireRedLaser(targetX: number, targetY: number) {
+  private fireRedLaser(targetX: number, targetY: number, targetZ: number = 0, is3D: boolean = false) {
     const laser = this.lasers.find(l => !l.active);
     if (!laser) return;
 
     laser.active = true;
-    laser.life = 1.6;
+    laser.life = is3D ? 2.2 : 1.6;
     laser.position.set(this.position.x, this.position.y - 0.25, this.position.z);
     laser.mesh.position.copy(laser.position);
     laser.mesh.visible = true;
@@ -678,10 +759,22 @@ export class DroneEnemy {
     this.muzzleFlashTimer = 0.16;
     this.jiggleTimer = Math.max(this.jiggleTimer, 0.14);
 
-    const angle = Math.atan2(targetY - laser.position.y, targetX - laser.position.x);
-    const speed = 17.5;
-    laser.velocity.set(Math.cos(angle) * speed, Math.sin(angle) * speed, 0);
-    laser.mesh.rotation.set(0, 0, angle);
+    const speed = 18.5;
+    if (is3D) {
+      const dir = new THREE.Vector3(
+        targetX - laser.position.x,
+        targetY - laser.position.y,
+        targetZ - laser.position.z
+      );
+      if (dir.lengthSq() > 0.001) dir.normalize();
+      else dir.set(-1, 0, 0);
+      laser.velocity.copy(dir).multiplyScalar(speed);
+      laser.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
+    } else {
+      const angle = Math.atan2(targetY - laser.position.y, targetX - laser.position.x);
+      laser.velocity.set(Math.cos(angle) * speed, Math.sin(angle) * speed, 0);
+      laser.mesh.rotation.set(0, 0, angle);
+    }
   }
 
   private updateLasers(dt: number) {
@@ -705,6 +798,15 @@ export class DroneEnemy {
       l.position.addScaledVector(l.velocity, dt);
       l.mesh.position.copy(l.position);
     }
+  }
+
+  public setShadowSurfaceY(surfaceY: number) {
+    if (!this.shadowMesh) return;
+    this.shadowMesh.position.set(this.position.x, surfaceY + 0.02, this.position.z);
+    const heightAbove = Math.max(0, this.position.y - surfaceY);
+    const sScale = Math.max(0.25, 1.0 - heightAbove * 0.10);
+    this.shadowMesh.scale.set(sScale, sScale, sScale);
+    (this.shadowMesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0.10, 0.38 - heightAbove * 0.05);
   }
 
   public destroy(scene: THREE.Scene) {

@@ -243,12 +243,56 @@ export class Player {
       surface: { height: number; slopeAngleX: number; slopeAngleZ: number; conveyorVx: number; conveyorVz: number };
     },
     camYaw: number = 0,
-    slideTrigger: boolean = false
+    slideTrigger: boolean = false,
+    lockedTargetWorld?: THREE.Vector3
   ) {
     this.animTimer += dt;
     if (this.shootTimer > 0) this.shootTimer = Math.max(0, this.shootTimer - dt);
     if (this.invulnerableTime > 0) this.invulnerableTime = Math.max(0, this.invulnerableTime - dt);
     this.updateLasers(dt);
+
+    // Dedicated 3D Death Animation & Collapse in Level 2 (Mixamo Standing React Death Backward!)
+    if (this.isDying) {
+      this.deathTimer += dt;
+      this.invulnerableTime = 999;
+      this.mesh.visible = true;
+      if (this.thrusterLight) this.thrusterLight.intensity = 0;
+      if (this.shieldGroup) this.shieldGroup.visible = false;
+      this.isHoverHanging = false;
+
+      if (!this.deathHasLanded) {
+        this.velocity.y -= 24.0 * dt;
+        this.velocity.x *= Math.max(0, 1.0 - dt * 3.0);
+        this.velocity.z *= Math.max(0, 1.0 - dt * 3.0);
+        const nextX = THREE.MathUtils.clamp(this.position.x + this.velocity.x * dt, -52, 80);
+        const nextZ = THREE.MathUtils.clamp(this.position.z + this.velocity.z * dt, -64, 64);
+        const res = resolveMove(this.position.x, this.position.y, this.position.z, nextX, nextZ, 0.34);
+        this.position.x = res.x;
+        this.position.z = res.z;
+        this.position.y += this.velocity.y * dt;
+        if (this.position.y <= res.surface.height) {
+          this.position.y = res.surface.height;
+          this.velocity.set(0, 0, 0);
+          this.deathHasLanded = true;
+          this.isGrounded = true;
+          this.emitDust(this.position.x, res.surface.height, 12, this.position.z);
+          this.onLand?.(0.85);
+        }
+      } else {
+        this.groundedDeathTimer += dt;
+        if (this.groundedDeathTimer >= 1.65 || this.deathTimer >= 3.2) {
+          this.isDead = true;
+        }
+      }
+
+      this.mesh.position.copy(this.position);
+      this.rigRoot.position.set(0, 0, 0);
+      this.rigRoot.rotation.z = 0;
+      this.mixamoRig?.updateDeath(dt);
+      this.updateBubbleBurstVFX(dt);
+      this.updateParticles(dt);
+      return;
+    }
 
     // 1. Camera-relative 360° horizontal movement vector
     const inputLen = Math.hypot(moveX, moveZ);
@@ -294,7 +338,7 @@ export class Player {
       const boost = Math.max(curHorizSpd + 3.4, 13.0);
       this.velocity.x = slideDirX * boost;
       this.velocity.z = slideDirZ * boost;
-      this.emitDust(this.position.x, this.position.y, 10);
+      this.emitDust(this.position.x, this.position.y, 10, this.position.z);
       this.mixamoRig?.triggerSlide();
       this.onSlide?.();
     }
@@ -304,7 +348,7 @@ export class Player {
       if (!this.isGrounded || this.isDying) {
         this.slideTimer = 0;
       } else if (Math.random() < 0.45) {
-        this.emitDust(this.position.x, this.position.y, 1);
+        this.emitDust(this.position.x, this.position.y, 1, this.position.z);
       }
     }
 
@@ -369,21 +413,24 @@ export class Player {
     }
 
     const wantJetpack = (jetpackDirectTrigger || (!this.isGrounded && this.jumpsRemaining <= 0 && jetpackPressed)) && this.fuel > 0;
+    const preSurfCheck = resolveMove(this.position.x, this.position.y, this.position.z, this.position.x, this.position.z, 0.34).surface;
+    const heightAboveSurfNow = this.position.y - preSurfCheck.height;
     let isHoverHanging = false;
     if (wantJetpack) {
       this.usedJetpackThisAir = true;
-      this.jetpackHoverHangTimer = 1.0;
+      this.jetpackHoverHangTimer = heightAboveSurfNow > 1.1 ? 0.55 : 0;
       const throttle = Math.max(0.25, jetpackThrottle);
       this.fuel = Math.max(0, this.fuel - 26.0 * throttle * dt);
       this.velocity.y = THREE.MathUtils.lerp(this.velocity.y, 2.2 + 4.4 * throttle, Math.min(1, dt * 8.0));
       this.isGrounded = false;
     } else {
       this.fuel = Math.min(this.maxFuel, this.fuel + (this.isGrounded ? 48.0 : 18.0) * dt);
-      if (!this.isGrounded && this.usedJetpackThisAir && this.jetpackHoverHangTimer > 0) {
+      if (!this.isGrounded && !crouchPressed && this.usedJetpackThisAir && this.jetpackHoverHangTimer > 0 && heightAboveSurfNow > 0.65) {
         this.jetpackHoverHangTimer = Math.max(0, this.jetpackHoverHangTimer - dt);
         isHoverHanging = true;
         this.velocity.y = THREE.MathUtils.lerp(this.velocity.y, 0, Math.min(1, dt * 12.0));
       } else {
+        this.jetpackHoverHangTimer = 0;
         this.velocity.y -= 28.5 * dt;
         this.velocity.y = Math.max(this.velocity.y, -19.5);
       }
@@ -437,7 +484,7 @@ export class Player {
           const boost = Math.max(spd + 2.8, 12.2);
           this.velocity.x = sx * boost;
           this.velocity.z = sz * boost;
-          this.emitDust(this.position.x, surface.height, 12);
+          this.emitDust(this.position.x, surface.height, 12, this.position.z);
           this.mixamoRig?.triggerSlide();
           this.onSlide?.();
         } else {
@@ -488,6 +535,23 @@ export class Player {
       this.shadowMesh.visible = false;
     }
 
+    // Live 3D Target Aim Tracking (up/down pitch + torso alignment while shooting so gun arm NEVER crosses through body!)
+    let aimPitch3D: number | undefined = undefined;
+    if (lockedTargetWorld && (this.shootTimer > 0 || this.mixamoRig?.isAimingGun())) {
+      const tdx = lockedTargetWorld.x - this.position.x;
+      const tdz = lockedTargetWorld.z - this.position.z;
+      const tdy = lockedTargetWorld.y - (this.position.y + 1.48);
+      const horizD = Math.hypot(tdx, tdz);
+      if (horizD > 0.25) {
+        aimPitch3D = THREE.MathUtils.clamp(Math.atan2(tdy, horizD), -0.60, 0.70);
+        // Smoothly face Jones's torso toward the locked enemy while gun is raised so his right arm stays 100% clear of his chest!
+        const aimYaw = Math.atan2(-tdz, tdx);
+        let yDiff = ((aimYaw - this.rigRoot.rotation.y + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+        this.rigRoot.rotation.y += yDiff * Math.min(1, dt * 16.0);
+        this.facingRight = tdx >= 0;
+      }
+    }
+
     const effThrottle = wantJetpack ? Math.max(0.35, jetpackThrottle) : 0;
     this.mixamoRig?.update(
       dt,
@@ -499,7 +563,7 @@ export class Player {
       effThrottle,
       Math.max(0, this.position.y - surface.height),
       this.usedJetpackThisAir,
-      undefined,
+      aimPitch3D,
       false,
       isHoverHanging,
       localForwardSlope,
@@ -1336,10 +1400,9 @@ export class Player {
       });
     }
 
-    // Physical World Dropped Blaster for Death Sequence
-    this.droppedGunMesh = this.blasterMesh.clone(true);
+    // Legacy procedural dropped gun removed (Mixamo Jones uses the 3D Colt Peacemaker exclusively!)
+    this.droppedGunMesh = new THREE.Group();
     this.droppedGunMesh.visible = false;
-    scene.add(this.droppedGunMesh);
 
     // BACK ARM (Supports in Two-Handed Tactical Pistol Stance)
     this.backArmBone = new THREE.Group();
@@ -2169,7 +2232,11 @@ export class Player {
         const dy = aimTargetWorld.y - (this.position.y + 1.48);
         const horiz = Math.hypot(dx, dz);
         if (horiz > 0.2) {
-          aimPitch3D = THREE.MathUtils.clamp(Math.atan2(dy, horiz), -0.55, 0.55);
+          aimPitch3D = THREE.MathUtils.clamp(Math.atan2(dy, horiz), -0.60, 0.70);
+          // Immediately align torso yaw toward locked 3D target on frame 0 so the shooting arm NEVER goes through Jones's body!
+          this.rigRoot.rotation.y = Math.atan2(-dz, dx);
+          this.facingRight = dx >= 0;
+          this.mesh.updateWorldMatrix(true, true);
         }
       }
       this.mixamoRig.triggerShoot(is3D ? aimPitch3D : aimAngle);
@@ -2268,19 +2335,10 @@ export class Player {
     this.mixamoRig?.getNozzleWorldPositions(this.nozzleWorldL, this.nozzleWorldR, this.position);
     this.jetpackVfx.emitDoubleJumpBurst(this.nozzleWorldL, this.nozzleWorldR, this.velocity.x);
 
-    // Drop blaster gun: pops out of hand and tumbles dynamically onto floor
-    this.hasDroppedGun = true;
+    // Keep legacy procedural blaster permanently hidden (never spawn floating old gun!)
+    this.hasDroppedGun = false;
     this.blasterMesh.visible = false;
-    const handWorldPos = new THREE.Vector3();
-    this.frontHandBone.getWorldPosition(handWorldPos);
-    this.droppedGunPos.copy(handWorldPos);
-    this.droppedGunVel.set((this.facingRight ? 2.8 : -2.8) + (Math.random() - 0.5), 4.2 + Math.random(), 0);
-    this.droppedGunRotZ = this.facingRight ? 0.4 : -0.4;
-    this.droppedGunRotVel = this.facingRight ? -12.0 : 12.0;
-    this.droppedGunMesh.position.copy(this.droppedGunPos);
-    this.droppedGunMesh.rotation.z = this.droppedGunRotZ;
-    this.droppedGunMesh.visible = true;
-    this.emitSparks(handWorldPos.x, handWorldPos.y, 0, 6);
+    if (this.droppedGunMesh) this.droppedGunMesh.visible = false;
   }
 
   /**
@@ -2610,13 +2668,14 @@ export class Player {
     const allowJetpack = jetpackDirectTrigger || (!didJumpThisFrame && (this.jumpsRemaining === 0 || this.airJumpHoldTimer > 0.20));
     const isActuallyJetpacking = jetpackPressed && allowJetpack && this.fuel > 0 && !isActuallyCrouching && !ceilingBlocked;
 
-    // 1.0-second Hover-Hang Grace Window when releasing the Jetpack flying button in mid-air!
+    // 1.0-second Hover-Hang Grace Window when releasing the Jetpack high in mid-air
+    // (Skip hover-hang when already near ground < 1.1m so Jones lands promptly instead of floating above the floor!)
     if (isActuallyJetpacking) {
       this.jetpackHoverHangTimer = 0;
-    } else if (this.wasJetpackingLastFrame && !this.isGrounded && !crouchPressed) {
-      this.jetpackHoverHangTimer = 1.0; // Hold altitude for 1 full second before falling!
+    } else if (this.wasJetpackingLastFrame && !this.isGrounded && !crouchPressed && this.position.y > GROUND_Y + 1.1) {
+      this.jetpackHoverHangTimer = 0.55; // Crisp 0.55s mid-air hover-hang before smooth descent!
     } else if (this.jetpackHoverHangTimer > 0) {
-      if (this.isGrounded || crouchPressed || this.isDying) {
+      if (this.isGrounded || crouchPressed || this.isDying || this.position.y <= GROUND_Y + 0.65) {
         this.jetpackHoverHangTimer = 0;
       } else {
         this.jetpackHoverHangTimer = Math.max(0, this.jetpackHoverHangTimer - dt);
@@ -4082,7 +4141,7 @@ export class Player {
     }
   }
 
-  private emitDust(x: number, y: number, count: number) {
+  private emitDust(x: number, y: number, count: number, z: number = 0.1) {
     for (let i = 0; i < count; i++) {
       const d = this.dustPuffs.find(p => !p.active);
       if (!d) continue;
@@ -4090,11 +4149,15 @@ export class Player {
       d.active = true;
       d.age = 0;
       d.maxLife = 0.3 + Math.random() * 0.2;
-      d.mesh.position.set(x + (Math.random() - 0.5) * 0.4, y, 0.1);
+      d.mesh.position.set(
+        x + (Math.random() - 0.5) * 0.4,
+        y,
+        z + (Math.random() - 0.5) * 0.35
+      );
       d.velocity.set(
         (Math.random() - 0.5) * 3.5,
         Math.random() * 2.2 + 0.5,
-        0
+        (Math.random() - 0.5) * 2.2
       );
       d.mesh.scale.set(1, 1, 1);
       d.mesh.visible = true;

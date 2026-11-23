@@ -101,7 +101,97 @@ export class ParallaxLayers {
     this.initAestheticMaterials();
     // All background elements removed so the nowhere_road_2k HDRI shines cleanly across the entire background!
     this.createSeamlessCatwalkBridge();
+    this.createPinkFlamingoMotelSign();
+    this.createPublicToiletsMidLandmark();
+    this.createTransitHubEndStation();
     this.createForegroundTerminalConsoles();
+  }
+
+  /**
+   * Iconic "THE PINK FLAMINGO MOTEL" transparent retro sci-fi landmark sign
+   * positioned at the beginning of Level 1, left of Jones, with its base flush on GROUND_Y (-3.70)!
+   */
+  private createPinkFlamingoMotelSign() {
+    const loader = new THREE.TextureLoader();
+    const tex = loader.load('/textures/pink_flamingo_motel.png');
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+
+    const signHeight = 7.2;
+    const aspect = 853 / 960;
+    const signWidth = signHeight * aspect;
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      alphaTest: 0.12,
+      side: THREE.DoubleSide,
+      depthWrite: true
+    });
+
+    const signMesh = new THREE.Mesh(new THREE.PlaneGeometry(signWidth, signHeight), mat);
+    signMesh.name = 'PinkFlamingoMotelSign';
+    // Positioned left of player start (x = 0) with bottom edge flush on GROUND_Y (-3.70)
+    signMesh.position.set(-5.4, -3.70 + signHeight * 0.5, -1.85);
+    this.group.add(signMesh);
+  }
+
+  /**
+   * "PUBLIC TOILETS / MUNICIPAL RESTROOMS" transparent retro sci-fi landmark
+   * positioned cleanly in the middle of Level 1 (x = 60.0, z = -2.35) behind the runway
+   * so it never obscures or touches any platforms, portals, or obstacles, with its base flush on GROUND_Y (-3.70)!
+   */
+  private createPublicToiletsMidLandmark() {
+    const loader = new THREE.TextureLoader();
+    const tex = loader.load('/textures/public_toilets.png');
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+
+    const h = 6.2;
+    const aspect = 916 / 994;
+    const w = h * aspect;
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      alphaTest: 0.12,
+      side: THREE.DoubleSide,
+      depthWrite: true
+    });
+
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    mesh.name = 'PublicToiletsLandmark';
+    mesh.position.set(60.0, -3.70 + h * 0.5, -2.35);
+    this.group.add(mesh);
+  }
+
+  /**
+   * "TRANSIT HUB // SECTOR 7" transparent retro sci-fi shelter landmark
+   * positioned at the end of Level 1 (x = 124.5) with its concrete base flush on GROUND_Y (-3.70)!
+   */
+  private createTransitHubEndStation() {
+    const loader = new THREE.TextureLoader();
+    const tex = loader.load('/textures/transit_hub_sector7.png');
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+
+    const hubHeight = 5.8;
+    const aspect = 997 / 529;
+    const hubWidth = hubHeight * aspect;
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      alphaTest: 0.08,
+      side: THREE.DoubleSide,
+      depthWrite: true
+    });
+
+    const hubMesh = new THREE.Mesh(new THREE.PlaneGeometry(hubWidth, hubHeight), mat);
+    hubMesh.name = 'TransitHubSector7';
+    // Seated flush on GROUND_Y (-3.70) at the end of Level 1 right beside the Finish Gate (x = 120)
+    hubMesh.position.set(124.5, -3.70 + hubHeight * 0.5, -1.95);
+    this.group.add(hubMesh);
   }
 
   private initAestheticMaterials() {

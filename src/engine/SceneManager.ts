@@ -25,6 +25,12 @@ export class SceneManager {
   private shakeIntensity: number = 0;
   private shakeDuration: number = 0;
 
+  // Level 2 Cinematic Lock-On Shoot Framing (3rd-Person Temporary Enemy Alignment)
+  private cinematicFocusTimer: number = 0;
+  private cinematicTarget: THREE.Vector3 = new THREE.Vector3();
+  private cinematicLookPos: THREE.Vector3 = new THREE.Vector3();
+  private cinematicLookInit: boolean = false;
+
   // Handheld Camera Mode
   public handheldEnabled: boolean = true;
   public handheldIntensity: number = 0.7; // 0.0 (static) to 1.0 (full organic handheld sway)
@@ -518,8 +524,23 @@ export class SceneManager {
   }
 
   /**
+   * Temporarily aligns the 3rd-person camera into a dramatic over-the-shoulder cinematic angle
+   * framing Jones and the locked-on enemy being shot!
+   */
+  public triggerCinematicShootFocus(enemyWorldPos: THREE.Vector3, duration: number = 1.25) {
+    if (this.level2CamMode !== 'third_person') return;
+    this.cinematicTarget.copy(enemyWorldPos);
+    this.cinematicFocusTimer = duration;
+  }
+
+  public cancelCinematicShootFocus() {
+    this.cinematicFocusTimer = 0;
+  }
+
+  /**
    * Level 2 Triple-AAA Dual Camera System:
-   * - 'third_person': Smooth dynamic 3rd-person follow camera behind/above Jones with optional right-stick orbit!
+   * - 'third_person': Smooth dynamic 3rd-person follow camera behind/above Jones with optional orbit,
+   *   cinematic lock-on shoot framing, AND anti-clipping collision against ramps/blocks/floor!
    * - 'orthographic': Crisp Triple-AAA isometric orthographic camera tracking Jones smoothly across the 3D plane!
    */
   public updateCameraFreeRoam(
@@ -528,16 +549,17 @@ export class SceneManager {
     targetZ: number,
     dt: number,
     rightStickX: number = 0,
-    rightStickY: number = 0
+    rightStickY: number = 0,
+    resolveCollision?: (px: number, py: number, pz: number, dx: number, dy: number, dz: number) => { x: number; y: number; z: number }
   ) {
-    if (Math.abs(rightStickX) > 0.01) {
+    const manualOrbit = Math.abs(rightStickX) > 0.01 || Math.abs(rightStickY) > 0.01;
+    if (manualOrbit) {
+      this.cinematicFocusTimer = 0;
       this.level2OrbitYaw -= rightStickX * dt * 2.0;
-    }
-    if (Math.abs(rightStickY) > 0.01) {
       this.level2OrbitPitch = THREE.MathUtils.clamp(this.level2OrbitPitch - rightStickY * dt * 1.2, 0.08, 0.72);
     }
 
-    const focusY = targetY + 1.15;
+    const focusY = targetY + 1.20;
     if (this.level2CamMode === 'orthographic') {
       // Triple-AAA Isometric Orthographic Tracking Camera
       const goalX = targetX + 12.0;
@@ -548,16 +570,56 @@ export class SceneManager {
       this.orthoCamera.position.z = THREE.MathUtils.lerp(this.orthoCamera.position.z, goalZ, Math.min(1, dt * 6.5));
       this.orthoCamera.lookAt(targetX, focusY, targetZ);
     } else {
-      // Triple-AAA 3rd-Person Perspective Follow Camera
-      const dist = 10.5;
+      // Optional Temporary Cinematic Over-The-Shoulder Framing when shooting a locked-on enemy!
+      let desiredLookX = targetX;
+      let desiredLookY = focusY;
+      let desiredLookZ = targetZ;
+      let camDist = 10.5;
+
+      if (this.cinematicFocusTimer > 0) {
+        this.cinematicFocusTimer = Math.max(0, this.cinematicFocusTimer - dt);
+        const dx = targetX - this.cinematicTarget.x;
+        const dz = targetZ - this.cinematicTarget.z;
+        if (dx * dx + dz * dz > 0.5) {
+          // Place camera DIRECTLY behind Jones looking straight toward the enemy with a crisp closer zoom-in!
+          const idealYaw = Math.atan2(dx, dz);
+          let yawDiff = ((idealYaw - this.level2OrbitYaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+          this.level2OrbitYaw += yawDiff * Math.min(1, dt * 5.6);
+          this.level2OrbitPitch = THREE.MathUtils.lerp(this.level2OrbitPitch, 0.16, Math.min(1, dt * 5.0));
+          camDist = 7.4; // Closer cinematic zoom-in right behind Jones!
+          // Frame Jones cleanly in foreground looking straight at the target enemy
+          desiredLookX = THREE.MathUtils.lerp(targetX, this.cinematicTarget.x, 0.35);
+          desiredLookY = THREE.MathUtils.lerp(focusY, this.cinematicTarget.y, 0.28);
+          desiredLookZ = THREE.MathUtils.lerp(targetZ, this.cinematicTarget.z, 0.35);
+        }
+      }
+
+      // Triple-AAA 3rd-Person Perspective Follow Camera + Anti-Clipping Collision Arm!
       const cosP = Math.cos(this.level2OrbitPitch);
-      const goalX = targetX + Math.sin(this.level2OrbitYaw) * cosP * dist;
-      const goalY = focusY + Math.sin(this.level2OrbitPitch) * dist;
-      const goalZ = targetZ + Math.cos(this.level2OrbitYaw) * cosP * dist;
-      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, goalX, Math.min(1, dt * 7.0));
-      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, goalY, Math.min(1, dt * 7.0));
-      this.camera.position.z = THREE.MathUtils.lerp(this.camera.position.z, goalZ, Math.min(1, dt * 7.0));
-      this.camera.lookAt(targetX, focusY, targetZ);
+      let goalX = targetX + Math.sin(this.level2OrbitYaw) * cosP * camDist;
+      let goalY = focusY + Math.sin(this.level2OrbitPitch) * camDist;
+      let goalZ = targetZ + Math.cos(this.level2OrbitYaw) * cosP * camDist;
+
+      if (resolveCollision) {
+        const safe = resolveCollision(targetX, focusY + 0.25, targetZ, goalX, goalY, goalZ);
+        goalX = safe.x;
+        goalY = safe.y;
+        goalZ = safe.z;
+      }
+
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, goalX, Math.min(1, dt * 8.0));
+      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, goalY, Math.min(1, dt * 8.0));
+      this.camera.position.z = THREE.MathUtils.lerp(this.camera.position.z, goalZ, Math.min(1, dt * 8.0));
+
+      if (!this.cinematicLookInit) {
+        this.cinematicLookPos.set(desiredLookX, desiredLookY, desiredLookZ);
+        this.cinematicLookInit = true;
+      } else {
+        this.cinematicLookPos.x = THREE.MathUtils.lerp(this.cinematicLookPos.x, desiredLookX, Math.min(1, dt * 7.5));
+        this.cinematicLookPos.y = THREE.MathUtils.lerp(this.cinematicLookPos.y, desiredLookY, Math.min(1, dt * 7.5));
+        this.cinematicLookPos.z = THREE.MathUtils.lerp(this.cinematicLookPos.z, desiredLookZ, Math.min(1, dt * 7.5));
+      }
+      this.camera.lookAt(this.cinematicLookPos);
     }
 
     // Keep overhead keyLight centered on Jones

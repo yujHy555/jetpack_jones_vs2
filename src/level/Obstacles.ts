@@ -1946,7 +1946,7 @@ export class ObstacleManager {
     return list;
   }
 
-  public update(dt: number, time: number, playerX: number, playerY: number = 0) {
+  public update(dt: number, time: number, playerX: number, playerY: number = 0, playerZ: number = 0, is3D: boolean = false) {
     // Update and recycle obstacles
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const obs = this.obstacles[i];
@@ -1995,7 +1995,7 @@ export class ObstacleManager {
     // Update and recycle attack drones
     for (let i = this.drones.length - 1; i >= 0; i--) {
       const d = this.drones[i];
-      d.update(dt, time, playerX, playerY);
+      d.update(dt, time, playerX, playerY, -3.70, playerZ, is3D);
 
       // Only recycle attack drone when death explosion has fully finished
       if ((!d.active && !d.isDying) || d.position.x < playerX - 180) {
@@ -2341,6 +2341,14 @@ export class ObstacleManager {
             d.position.y = plat.y + platHalfH + combinedR;
           }
         }
+        // Keep drone's entire dangling tentacles (1.82m below center) from clipping into platforms underneath!
+        if (Math.abs(d.position.x - plat.x) < platHalfW + d.radius && d.position.y > plat.y && d.position.y < plat.y + platHalfH + 1.82) {
+          d.position.y = plat.y + platHalfH + 1.82;
+        }
+      }
+      // Keep drone tentacles clear of the ground floor (-3.70)
+      if (d.position.y < -3.70 + 1.82) {
+        d.position.y = -3.70 + 1.82;
       }
 
       // Check Crates

@@ -391,6 +391,131 @@ export class Level2FreeRoam {
     };
   }
 
+  /**
+   * Full-Body 3D Collision Solver for Flying Enemies (Helmet Dome + Pods + 1.78m Dangling Tentacles!):
+   * Guarantees NO part of a drone can ever clip into the 30° ramp, elevated landing deck, conveyor belt, or floor!
+   */
+  public resolveFlyingEntity(
+    prevX: number,
+    prevY: number,
+    prevZ: number,
+    nextX: number,
+    nextY: number,
+    nextZ: number,
+    radius: number = 0.78,
+    bottomClearance: number = 1.88
+  ): { x: number; y: number; z: number; surfaceHeight: number } {
+    let x = nextX;
+    let y = nextY;
+    let z = nextZ;
+
+    // 1. Check solid side & back walls of the 30° Ramp + Elevated Landing Deck block (x: 16..28, z: -2.6..2.6)
+    const minX = this.rampStartX - radius;
+    const maxX = this.deckEndX + radius;
+    const maxAbsZ = this.rampHalfZ + radius;
+
+    if (x > minX && x < maxX && Math.abs(z) < maxAbsZ) {
+      const clampedX = THREE.MathUtils.clamp(x, this.rampStartX, this.deckEndX);
+      const blockTopAtX = clampedX <= this.rampEndX
+        ? GROUND_Y + ((clampedX - this.rampStartX) / (this.rampEndX - this.rampStartX)) * this.rampTopHeight
+        : GROUND_Y + this.rampTopHeight;
+
+      const droneBottom = y - bottomClearance;
+      // If drone's tentacles/body are below the solid ramp/deck surface:
+      if (droneBottom < blockTopAtX) {
+        const wasOutsideZ = Math.abs(prevZ) >= maxAbsZ - 0.05;
+        const wasOutsideBackX = prevX >= maxX - 0.05;
+        const blockTooHighToGlideOver = (blockTopAtX - droneBottom) > 1.35;
+        if (wasOutsideZ && blockTooHighToGlideOver) {
+          // Deflect cleanly around the solid side wall of the ramp/deck!
+          z = Math.sign(prevZ || z || 1) * maxAbsZ;
+        } else if (wasOutsideBackX && blockTooHighToGlideOver) {
+          // Deflect cleanly off the solid back wall of the elevated deck!
+          x = maxX;
+        } else {
+          // Smoothly lift entire drone + tentacles above the 30° ramp / deck surface!
+          y = blockTopAtX + bottomClearance;
+        }
+      }
+    }
+
+    // 2. Final full-footprint surface clearance check (Floor, Conveyor, 30° Ramp, Elevated Deck)
+    const surf = this.getSurfaceInfo(x, z, radius);
+    const minAllowedY = surf.height + bottomClearance;
+    if (y < minAllowedY) {
+      y = minAllowedY;
+    }
+
+    return { x, y, z, surfaceHeight: surf.height };
+  }
+
+  /**
+   * Swept 3D Segment Surface Raycast for Fast Lasers/Bullets:
+   * Samples along prev -> cur so fast bolts NEVER tunnel through the 30° ramp, landing deck, conveyor, or floor!
+   */
+  public raycastSurfaceHit(
+    prevX: number,
+    prevY: number,
+    prevZ: number,
+    curX: number,
+    curY: number,
+    curZ: number
+  ): { x: number; y: number; z: number; surfaceHeight: number } | null {
+    const steps = 8;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const sx = prevX + (curX - prevX) * t;
+      const sy = prevY + (curY - prevY) * t;
+      const sz = prevZ + (curZ - prevZ) * t;
+      const surf = this.getSurfaceInfo(sx, sz, 0.08);
+      if (sy <= surf.height + 0.08) {
+        return { x: sx, y: Math.max(sy, surf.height + 0.04), z: sz, surfaceHeight: surf.height };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 3rd-Person Camera Anti-Clipping Solver:
+   * Traces from Jones's shoulder pivot to the desired camera position and smoothly pulls
+   * the camera forward/upward so it NEVER clips through the 30° ramp, landing deck, conveyor, or floor!
+   */
+  public resolveCameraPosition(
+    pivotX: number,
+    pivotY: number,
+    pivotZ: number,
+    desiredX: number,
+    desiredY: number,
+    desiredZ: number
+  ): { x: number; y: number; z: number } {
+    const steps = 16;
+    const minClearance = 0.58;
+    let bestT = 1.0;
+
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const sx = pivotX + (desiredX - pivotX) * t;
+      const sy = pivotY + (desiredY - pivotY) * t;
+      const sz = pivotZ + (desiredZ - pivotZ) * t;
+      const surf = this.getSurfaceInfo(sx, sz, 0.38);
+      if (sy < surf.height + minClearance) {
+        // Pull camera slightly in front of the intersected ramp/deck/floor
+        bestT = Math.max(0.22, (i - 1) / steps);
+        break;
+      }
+    }
+
+    const rx = pivotX + (desiredX - pivotX) * bestT;
+    let ry = pivotY + (desiredY - pivotY) * bestT;
+    const rz = pivotZ + (desiredZ - pivotZ) * bestT;
+
+    const finalSurf = this.getSurfaceInfo(rx, rz, 0.38);
+    if (ry < finalSurf.height + minClearance) {
+      ry = finalSurf.height + minClearance;
+    }
+    return { x: rx, y: ry, z: rz };
+  }
+
   public update(dt: number) {
     if (!this.group.visible) return;
     if (this.conveyorTex) {

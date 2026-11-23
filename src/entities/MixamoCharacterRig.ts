@@ -975,14 +975,21 @@ export class MixamoCharacterRig {
    * arm (shoulder -> hand) AND the Colt Peacemaker barrel point dead-straight along _desDir
    * whether facing right (+X) or left (-X), compensating for torso lean, flight banking, and turn-around.
    */
+  public isAimingGun(): boolean {
+    return this.shootUpperWeight > 0.05 || this.shootAnimTimer > 0 || this.shootHolsterTimer > 0;
+  }
+
   private applyShootForwardAlignment() {
     if (this.shootUpperWeight <= 0.01 || !this.rightArmBone || !this.rightHandBone || !this.rightArmBone.parent) {
       return;
     }
 
-    // 100% straight elbow at full shoot weight so the arm is ruler-straight in both directions!
+    // 100% straight elbow + ergonomic neutral wrist at full shoot weight so the arm & hand NEVER pinch or distort!
     if (this.rightForeArmBone) {
       this.rightForeArmBone.quaternion.slerp(this._qIdent, this.shootUpperWeight);
+    }
+    if (this.rightHandBone) {
+      this.rightHandBone.quaternion.slerp(this._qIdent, this.shootUpperWeight * 0.85);
     }
 
     // Update FULL ancestor chain (player mesh -> rigRoot.rotation.y -> container -> visualPivot -> bones)
@@ -1000,9 +1007,13 @@ export class MixamoCharacterRig {
     this._charRight.set(0, 0, 1).transformDirection(this.container.matrixWorld).normalize();
 
     if (this.use3DForwardAim) {
-      // 3D Free-Roam: aim straight along Jones's 3D facing direction (+ clamped vertical pitch)
-      const pitchY = THREE.MathUtils.clamp(Math.sin(this.targetAimAngle), -0.58, 0.58);
-      this._desDir.copy(this._charFwd).setY(pitchY).addScaledVector(this._charRight, 0.08).normalize();
+      // 3D Free-Roam: aim straight along Jones's 3D facing direction + direct vertical pitch toward locked target!
+      const clampedPitch = THREE.MathUtils.clamp(this.targetAimAngle, -0.62, 0.72);
+      const cosP = Math.cos(clampedPitch);
+      const sinP = Math.sin(clampedPitch);
+      this._desDir.copy(this._charFwd).setY(0);
+      if (this._desDir.lengthSq() > 0.0001) this._desDir.normalize();
+      this._desDir.multiplyScalar(cosP).setY(sinP).addScaledVector(this._charRight, 0.11).normalize();
     } else {
       // 2D Side-Scroller: target aim direction in world XY plane
       const fwdX = Math.cos(this.targetAimAngle);
@@ -1212,12 +1223,17 @@ export class MixamoCharacterRig {
     this.squashY = 1.0 - THREE.MathUtils.clamp(impactStrength * 0.12, 0.04, 0.12);
     this.squashVel = 0;
     if (fromJetpack && this.actions.jetpack_land) {
-      // Silky flowing jetpack touchdown recovery that smoothly blends into idle/walk/run!
-      this.landAnimTimer = 0.28;
+      // If already in jetpack_land from aerial descent, finish the touchdown smoothly (short 0.16s settle);
+      // otherwise seek straight to the boot-contact phase so it NEVER replays the mid-air descent while grounded!
+      this.landAnimTimer = 0.16;
       if (this.activeKey !== 'jetpack_land') {
-        this.actions.jetpack_land.reset();
-        this.actions.jetpack_land.timeScale = 1.15;
-        this.playAction('jetpack_land', 0.14, true);
+        const landAct = this.actions.jetpack_land;
+        landAct.reset();
+        landAct.time = Math.min(0.28, landAct.getClip().duration * 0.34);
+        landAct.timeScale = 1.45;
+        this.playAction('jetpack_land', 0.08, true);
+      } else {
+        this.actions.jetpack_land.timeScale = 1.45;
       }
     } else {
       this.landAnimTimer = 0;
@@ -1345,30 +1361,31 @@ export class MixamoCharacterRig {
           // Finish heroic jetpack touchdown recovery smoothly before blending into Idle
           break;
         }
-        this.playAction('idle', 0.28);
+        // Silky-smooth 0.42s deceleration settle from Walk/Run -> Idle (ZERO snap!)
+        this.playAction('idle', 0.42);
         if (this.actions.idle) this.actions.idle.timeScale = 1.0;
         break;
 
       case PlayerState.WALK:
-        this.playAction('walk', 0.22);
+        this.playAction('walk', 0.30);
         if (this.actions.walk) {
-          // 1:1 stride-matched walk cadence (eliminates foot sliding!)
-          this.actions.walk.timeScale = THREE.MathUtils.clamp(absVx / 2.6, 0.25, 1.95);
+          // 1:1 stride-matched walk cadence with smooth minimum cadence so Walk -> Idle blends fluidly!
+          this.actions.walk.timeScale = THREE.MathUtils.clamp(absVx / 2.6, 0.38, 1.95);
         }
         break;
 
       case PlayerState.CROUCH_WALK:
         if (this.actions.crouch_walk) {
-          this.playAction('crouch_walk', 0.18);
-          this.actions.crouch_walk.timeScale = THREE.MathUtils.clamp(absVx / 2.4, 0.25, 1.85);
+          this.playAction('crouch_walk', 0.22);
+          this.actions.crouch_walk.timeScale = THREE.MathUtils.clamp(absVx / 2.4, 0.32, 1.85);
         } else {
-          this.playAction('walk', 0.20);
+          this.playAction('walk', 0.24);
           if (this.actions.walk) this.actions.walk.timeScale = 0.7;
         }
         break;
 
       case PlayerState.RUN:
-        this.playAction('run', 0.22);
+        this.playAction('run', 0.28);
         if (this.actions.run) {
           this.actions.run.timeScale = THREE.MathUtils.clamp(absVx / 6.2, 0.55, 1.85);
         }
@@ -1385,13 +1402,13 @@ export class MixamoCharacterRig {
 
       case PlayerState.JUMP:
       case PlayerState.FALL:
-        // After jetpack flight: keep jetpack_fly pose while descending until close to the ground (< 1.55m),
-        // then smoothly transition into jetpack_landing right before touchdown!
+        // After jetpack flight: anticipate landing EARLY while descending (< 3.8m above ground)
+        // so Jones's boots reach touchdown posture right ON impact instead of late!
         if (state === PlayerState.FALL && usedJetpackThisAir) {
-          if (heightAboveGround > 0.15 && heightAboveGround < 1.55 && vy < -0.8 && this.actions.jetpack_land) {
+          if (heightAboveGround > 0.05 && heightAboveGround < 3.8 && vy < -0.5 && this.actions.jetpack_land) {
             if (this.activeKey !== 'jetpack_land') {
               this.actions.jetpack_land.reset();
-              this.actions.jetpack_land.timeScale = 1.35;
+              this.actions.jetpack_land.timeScale = 1.40;
               this.playAction('jetpack_land', 0.08, true);
             }
             break;
@@ -1452,21 +1469,58 @@ export class MixamoCharacterRig {
         }
         fullAct.stopFading();
         if (this.activeLowerKey !== this.activeKey) {
-          this.stopAllLowerActions();
+          const prevLower = this.activeLowerKey ? this.lowerActions[this.activeLowerKey] : null;
+          // Stop any third stale lower-body action so only prevLower -> lowerAct ever blends!
+          for (const k of Object.keys(this.lowerActions) as AnimKey[]) {
+            const la = this.lowerActions[k];
+            if (la && k !== this.activeKey && k !== this.activeLowerKey) {
+              la.stopFading();
+              la.setEffectiveWeight(0);
+              la.stop();
+            }
+          }
+          lowerAct.stopFading();
           lowerAct.reset();
           lowerAct.time = fullAct.time;
           lowerAct.enabled = true;
+          lowerAct.setEffectiveWeight(1.0);
           lowerAct.play();
+          if (prevLower && prevLower !== lowerAct && prevLower.isRunning() && prevLower.getEffectiveWeight() > 0.05) {
+            const fadeDur = this.activeKey === 'idle' ? 0.34 : 0.22;
+            prevLower.crossFadeTo(lowerAct, fadeDur, false);
+          } else {
+            if (prevLower && prevLower !== lowerAct) {
+              prevLower.stopFading();
+              prevLower.setEffectiveWeight(0);
+              prevLower.stop();
+            }
+            lowerAct.setEffectiveWeight(this.shootUpperWeight);
+          }
           this.activeLowerKey = this.activeKey;
         }
         lowerAct.timeScale = fullAct.timeScale;
+        if (!fullAct.isRunning()) {
+          fullAct.enabled = true;
+          fullAct.play();
+        }
         fullAct.setEffectiveWeight(Math.max(0.0, 1.0 - this.shootUpperWeight));
-        lowerAct.setEffectiveWeight(this.shootUpperWeight);
       }
     } else if (this.activeLowerKey) {
       this.stopAllLowerActions();
       if (this.activeKey && this.actions[this.activeKey]) {
-        this.actions[this.activeKey]!.setEffectiveWeight(1.0);
+        const fullAct = this.actions[this.activeKey]!;
+        fullAct.stopFading();
+        fullAct.enabled = true;
+        fullAct.setEffectiveWeight(1.0);
+        if (!fullAct.isRunning()) fullAct.play();
+      }
+    } else if (this.activeKey && this.actions[this.activeKey]) {
+      // Safety guarantee: active full-body clip is ALWAYS enabled & running when not shooting (zero straight-leg sliding!)
+      const fullAct = this.actions[this.activeKey]!;
+      if (!fullAct.enabled || !fullAct.isRunning()) {
+        fullAct.enabled = true;
+        fullAct.setEffectiveWeight(1.0);
+        fullAct.play();
       }
     }
 
@@ -1512,13 +1566,11 @@ export class MixamoCharacterRig {
     this.squashY += this.squashVel * dt;
     this.squashY = THREE.MathUtils.clamp(this.squashY, 0.78, 1.26);
 
-    // 3. Crouch Compression (only needed as fallback if crouch_walk clip isn't loaded)
+    // 3. Keep Mixamo skeletal rig scale strictly uniform (1,1,1) in BOTH Level 1 & Level 2
+    // so non-uniform squash/stretch NEVER introduces shear or stretching into the rotated arm/wrist/hand bones!
     const targetCrouch = isCrouching && !this.actions.crouch_walk ? 1.0 : 0.0;
     this.crouchBlend = THREE.MathUtils.lerp(this.crouchBlend, targetCrouch, Math.min(1, dt * 16));
-    const finalScaleY = this.squashY * (1.0 - this.crouchBlend * 0.32);
-    const invXZ = 1.0 / Math.sqrt(Math.max(0.6, this.squashY));
-    const finalScaleXZ = invXZ * (1.0 + this.crouchBlend * 0.10);
-    this.visualPivot.scale.set(finalScaleXZ, finalScaleY, finalScaleXZ);
+    this.visualPivot.scale.set(1, 1, 1);
 
     // 4. Dynamic Flight Banking, Sprint Lean & Subtle 2nd-Jump Air Surge (NO 360° spin!)
     let targetLean = 0;
@@ -1534,7 +1586,7 @@ export class MixamoCharacterRig {
     } else if (!isGrounded) {
       targetLean = THREE.MathUtils.clamp(-vy * 0.012, -0.12, 0.10);
     }
-    this.leanPitch = THREE.MathUtils.lerp(this.leanPitch, targetLean, Math.min(1, dt * 11));
+    this.leanPitch = THREE.MathUtils.lerp(this.leanPitch, targetLean, Math.min(1, dt * 8.0));
     // TRUE TRIPLE-AAA NEXT-GEN SLOPE ALIGNMENT (Exact Mathematical Ramp Plane Match!):
     // 1. visualPivot.rotation.z matches 100% of the ramp's forward slope angle (+30° uphill / -30° downhill)
     //    so EVERY point along Jones's walking/running stride plane (dx = s*cos(θ), dy = s*sin(θ)) lies

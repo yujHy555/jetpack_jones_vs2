@@ -33,6 +33,7 @@ class Game {
   private pixelPortalManager: PixelPortalManager;
   private level2FreeRoam: Level2FreeRoam;
   private level2EnemiesSpawned: boolean = false;
+  private level2DroneSlots: { x: number; y: number; z: number; patrol: number; drone: any; respawnTimer: number }[] = [];
   private microDebris: MicroDebrisVFX;
   private level1Completed: boolean = false;
   private hangarCustomizer: HangarCustomizer;
@@ -848,6 +849,12 @@ class Game {
 
     // Hold Level 2 enemies back until Jones explores past x >= 21.5 (after Conveyor & 30° Ramp!)
     this.level2EnemiesSpawned = false;
+    this.level2DroneSlots = [
+      { x: 32.0, y: 1.2, z: -3.2, patrol: 4.0, drone: null, respawnTimer: 0 },
+      { x: 38.0, y: 0.6, z:  0.0, patrol: 3.8, drone: null, respawnTimer: 0 },
+      { x: 35.0, y: 2.2, z:  3.4, patrol: 4.2, drone: null, respawnTimer: 0 },
+      { x: 42.0, y: 1.4, z: -1.2, patrol: 3.5, drone: null, respawnTimer: 0 }
+    ];
 
     // Spawn Jones directly on the Moving Conveyor Belt in Level 2 (y = -3.56, z = 0)!
     this.player.reset(0, isLevel2 ? -3.56 : -3.70, 0);
@@ -934,9 +941,18 @@ class Game {
     this.deathSlowMoTimer = 0;
     this.startShootLockout = 0.35; // Guarantees zero accidental shot on start/load!
     this.sceneManager.cameraZoomOffset = 0;
-    this.player.reset(0, -3.70); // Start in idle on solid ground
+    this.player.reset(0, this.levelGenerator.currentLevel === 2 ? -3.56 : -3.70, 0); // Start in idle on solid ground / conveyor
     this.levelGenerator.reset(0);
     this.pixelPortalManager.reset(0);
+    if (this.levelGenerator.currentLevel === 2) {
+      this.level2EnemiesSpawned = false;
+      this.level2DroneSlots = [
+        { x: 32.0, y: 1.2, z: -3.2, patrol: 4.0, drone: null, respawnTimer: 0 },
+        { x: 38.0, y: 0.6, z:  0.0, patrol: 3.8, drone: null, respawnTimer: 0 },
+        { x: 35.0, y: 2.2, z:  3.4, patrol: 4.2, drone: null, respawnTimer: 0 },
+        { x: 42.0, y: 1.4, z: -1.2, patrol: 3.5, drone: null, respawnTimer: 0 }
+      ];
+    }
     if (this.levelGenerator.currentLevel === 1) {
       const staticBlockers = this.obstacleManager.obstacles
         .filter((obs) => obs.active && obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL)
@@ -1071,6 +1087,8 @@ class Game {
     this.updateLockOnSystem(dt, totalTime);
 
     if (this.state === GameState.PLAYING) {
+      // Guarantee shooting/movement input is ALWAYS active whenever PLAYING (never stuck false after switchLevel!)
+      this.inputManager.gameplayInputEnabled = true;
       // Post-start shoot lockout guarantees player NEVER shoots automatically on load/start
       if (this.startShootLockout > 0) {
         this.startShootLockout = Math.max(0, this.startShootLockout - rawDt);
@@ -1084,6 +1102,9 @@ class Game {
           this.rayBeamFlashTimer = 0.26;
           this.audioManager.playLaser();
           this.sceneManager.triggerShake(0.08, 0.08); // Satisfying gun recoil shake
+          if (isLevel2 && this.lockedEnemy) {
+            this.sceneManager.triggerCinematicShootFocus(this.inputManager.mouseWorldTarget, 1.25);
+          }
         }
       }
 
@@ -1124,7 +1145,7 @@ class Game {
       if (isLevel2) {
         // LEVEL 2: NEXT-GEN 3D FREE-ROAM + CONVEYOR BELT + 30° RAMP + TIGHT WALLS + REAL SHADOWS + TEST DRONES!
         this.level2FreeRoam.update(dt);
-        this.obstacleManager.update(dt, totalTime, this.player.position.x, this.player.position.y);
+        this.obstacleManager.update(dt, totalTime, this.player.position.x, this.player.position.y, this.player.position.z, true);
         const camYaw = this.sceneManager.level2CamMode === 'orthographic'
           ? Math.PI * 0.25
           : this.sceneManager.level2OrbitYaw;
@@ -1141,32 +1162,78 @@ class Game {
           this.inputManager.jetpackDirectTrigger,
           (px, py, pz, nx, nz, r) => this.level2FreeRoam.resolveHorizontalAndSurface(px, py, pz, nx, nz, r),
           camYaw,
-          slidePressed
+          slidePressed,
+          this.lockedEnemy ? this.inputManager.mouseWorldTarget : undefined
         );
-        // Spawn Level 2 test drone squadron once Jones advances past the 30° ramp (x >= 21.5)!
+        // Spawn Level 2 Alien Drone Squadron dropping dramatically FROM ABOVE once Jones advances past x >= 21.5!
         if (!this.level2EnemiesSpawned && this.player.position.x >= 21.5) {
           this.level2EnemiesSpawned = true;
-          this.showUpgradeBanner('⚠️ ALIEN DRONE SQUADRON INBOUND!');
-          this.obstacleManager.spawnDrone(32.0, 1.2, 4.0);
-          this.obstacleManager.spawnDrone(38.0, 0.6, 3.8);
-          this.obstacleManager.spawnDrone(35.0, 2.2, 4.2);
-          this.obstacleManager.spawnDrone(42.0, 1.4, 3.5);
-          if (this.obstacleManager.drones[0]) this.obstacleManager.drones[0].position.z = -3.2;
-          if (this.obstacleManager.drones[1]) this.obstacleManager.drones[1].position.z = 0.0;
-          if (this.obstacleManager.drones[2]) this.obstacleManager.drones[2].position.z = 3.4;
-          if (this.obstacleManager.drones[3]) this.obstacleManager.drones[3].position.z = -1.2;
+          this.showUpgradeBanner('⚠️ ALIEN DRONE SQUADRON DROPPING IN FROM ABOVE!');
+          for (let i = 0; i < this.level2DroneSlots.length; i++) {
+            const slot = this.level2DroneSlots[i];
+            const d = this.obstacleManager.spawnDrone(slot.x, slot.y, slot.patrol);
+            d.position.z = slot.z;
+            d.triggerDropInFromAbove(19.0 + i * 2.4, i * 0.22, 1.45);
+            slot.drone = d;
+            slot.respawnTimer = 0;
+          }
         }
 
-        // Check 3D bullet hits against Level 2 surfaces (Floor, Conveyor, 30° Ramp, Deck) AND Drones -> Micro-Debris Explosion!
+        // Level 2 Per-Drone 30-Second Sky-Drop Respawn Loop!
+        if (this.level2EnemiesSpawned) {
+          for (const slot of this.level2DroneSlots) {
+            if (slot.drone) {
+              if (!slot.drone.active && !slot.drone.isDying) {
+                slot.drone = null;
+                slot.respawnTimer = 30.0;
+              }
+            } else if (slot.respawnTimer > 0) {
+              slot.respawnTimer -= dt;
+              if (slot.respawnTimer <= 0) {
+                const d = this.obstacleManager.spawnDrone(slot.x, slot.y, slot.patrol);
+                d.position.z = slot.z;
+                d.triggerDropInFromAbove(20.0, 0, 1.45);
+                slot.drone = d;
+                slot.respawnTimer = 0;
+              }
+            }
+          }
+        }
+
+        // Full-Body 3D Collision Resolution for Level 2 Alien Drones (dome + pods + 1.78m tentacles!)
+        // Prevents ANY part of a drone from passing through the 30° ramp, elevated deck, conveyor, or floor!
+        for (const drone of this.obstacleManager.drones) {
+          if (!drone.active) continue;
+          const prevDX = drone.position.x - drone.velocity.x * dt;
+          const prevDY = drone.position.y - drone.velocity.y * dt;
+          const prevDZ = drone.position.z - drone.velocity.z * dt;
+          const res = this.level2FreeRoam.resolveFlyingEntity(
+            prevDX, prevDY, prevDZ,
+            drone.position.x, drone.position.y, drone.position.z,
+            0.78,
+            1.88
+          );
+          drone.position.set(res.x, res.y, res.z);
+          drone.setShadowSurfaceY(res.surfaceHeight);
+        }
+
+        // Check 3D bullet hits against Level 2 surfaces (Swept Segment against Floor, Conveyor, 30° Ramp, Deck) AND Drones -> Micro-Debris Explosion!
         for (const laser of this.player.lasers) {
           if (!laser.active) continue;
-          const lSurf = this.level2FreeRoam.getSurfaceInfo(laser.position.x, laser.position.z, 0.05);
-          if (laser.position.y <= lSurf.height + 0.06) {
+          const prevLX = laser.position.x - laser.velocity.x * dt;
+          const prevLY = laser.position.y - laser.velocity.y * dt;
+          const prevLZ = laser.position.z - laser.velocity.z * dt;
+          const hitSurf = this.level2FreeRoam.raycastSurfaceHit(
+            prevLX, prevLY, prevLZ,
+            laser.position.x, laser.position.y, laser.position.z
+          );
+          if (hitSurf) {
             laser.active = false;
             laser.mesh.visible = false;
-            this.microDebris.burst(laser.position.x, lSurf.height + 0.04, laser.position.z, 0x38d2ff, lSurf.height, 0, 1, 1.05);
+            this.microDebris.burst(hitSurf.x, hitSurf.y, hitSurf.z, 0x38d2ff, hitSurf.surfaceHeight, 0, 1, 1.05);
             continue;
           }
+          const lSurf = this.level2FreeRoam.getSurfaceInfo(laser.position.x, laser.position.z, 0.05);
           for (const drone of this.obstacleManager.drones) {
             if (!drone.active) continue;
             const d3 = laser.position.distanceTo(drone.position);
@@ -1187,22 +1254,75 @@ class Game {
             }
           }
         }
-        // Check Alien Drone lasers hitting Level 2 surfaces -> fiery crimson micro-debris!
+        // Check Alien Drone lasers hitting Level 2 surfaces (Swept Segment — NEVER clips through ramp/deck/floor!) AND Jones!
+        const pCenterY = this.player.position.y + (this.player.isCrouching ? 0.65 : 1.0);
         for (const drone of this.obstacleManager.drones) {
           for (const rLaser of drone.lasers) {
             if (!rLaser.active) continue;
-            const dSurf = this.level2FreeRoam.getSurfaceInfo(rLaser.position.x, rLaser.position.z, 0.05);
-            if (rLaser.position.y <= dSurf.height + 0.06) {
+            const prevRX = rLaser.position.x - rLaser.velocity.x * dt;
+            const prevRY = rLaser.position.y - rLaser.velocity.y * dt;
+            const prevRZ = rLaser.position.z - rLaser.velocity.z * dt;
+            const hitSurf = this.level2FreeRoam.raycastSurfaceHit(
+              prevRX, prevRY, prevRZ,
+              rLaser.position.x, rLaser.position.y, rLaser.position.z
+            );
+            if (hitSurf) {
               rLaser.active = false;
               rLaser.mesh.visible = false;
-              this.microDebris.burst(rLaser.position.x, dSurf.height + 0.04, rLaser.position.z, 0xff2244, dSurf.height, 0, 1, 1.15);
+              this.microDebris.burst(hitSurf.x, hitSurf.y, hitSurf.z, 0xff2244, hitSurf.surfaceHeight, 0, 1, 1.15);
+              continue;
+            }
+            const distToPlayer = Math.hypot(
+              rLaser.position.x - this.player.position.x,
+              rLaser.position.y - pCenterY,
+              rLaser.position.z - this.player.position.z
+            );
+            if (this.player.shieldActive && distToPlayer < 1.65) {
+              rLaser.velocity.negate().multiplyScalar(1.25);
+              rLaser.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), rLaser.velocity.clone().normalize());
+              this.player.takeDamage(0, Math.sign(rLaser.velocity.x) || 1);
+              this.audioManager.playShieldDeflect();
+              this.sceneManager.triggerShake(0.16, 0.10);
+            } else if (distToPlayer < 0.62) {
+              rLaser.active = false;
+              rLaser.mesh.visible = false;
+              if (this.player.invulnerableTime <= 0) {
+                this.player.takeDamage(18, Math.sign(rLaser.velocity.x) || 1);
+                this.audioManager.playHitImpact();
+                this.sceneManager.triggerShake(0.30, 0.20);
+              }
             }
           }
+        }
+        // Check Level 2 Alien Drone body contact vs Jones (when not dying)
+        if (!this.player.isDying && this.player.invulnerableTime <= 0) {
+          for (const drone of this.obstacleManager.drones) {
+            if (!drone.active) continue;
+            const dBody = Math.hypot(
+              drone.position.x - this.player.position.x,
+              drone.position.y - pCenterY,
+              drone.position.z - this.player.position.z
+            );
+            if (dBody < 1.15) {
+              const knock = this.player.position.x >= drone.position.x ? 1 : -1;
+              this.player.takeDamage(20, knock);
+              this.audioManager.playHitImpact();
+              this.sceneManager.triggerShake(0.32, 0.22);
+              break;
+            }
+          }
+        }
+        if (this.player.isDying) {
+          this.audioManager.setJetpackThrust(false);
+        }
+        if (this.player.isDead) {
+          this.onGameOver();
         }
         this.microDebris.update(dt);
         // Left-Mouse Drag + Gamepad Right-Stick rotate the Level 2 camera around Jones!
         const mouseOrbit = this.inputManager.consumeMouseOrbitDelta();
         if (mouseOrbit.dx !== 0 || mouseOrbit.dy !== 0) {
+          this.sceneManager.cancelCinematicShootFocus();
           this.sceneManager.level2OrbitYaw -= mouseOrbit.dx * 0.008;
           this.sceneManager.level2OrbitPitch = THREE.MathUtils.clamp(
             this.sceneManager.level2OrbitPitch + mouseOrbit.dy * 0.006,
@@ -1218,7 +1338,8 @@ class Game {
           this.player.position.z,
           dt,
           rsX,
-          rsY
+          rsY,
+          (px, py, pz, dx, dy, dz) => this.level2FreeRoam.resolveCameraPosition(px, py, pz, dx, dy, dz)
         );
         this.hud.update(this.score, this.player.life, this.player.fuel);
         this.sceneManager.render(false);
