@@ -65,6 +65,11 @@ class Game {
   private readonly _beamEnd = new THREE.Vector3();
   private readonly _beamDir = new THREE.Vector3();
   private readonly _beamUp = new THREE.Vector3(0, 1, 0);
+  private readonly _lockTargetPos = new THREE.Vector3();
+  private readonly _unitX = new THREE.Vector3(1, 0, 0);
+  private readonly _tmpDir = new THREE.Vector3();
+  private reticleEl: HTMLElement | null = null;
+  private reticleLocked: boolean = false;
 
   // Always-Visible FPS Counter Telemetry
   private fpsValueEl: HTMLElement | null = null;
@@ -91,6 +96,7 @@ class Game {
     this.fpsMsEl = document.getElementById('fps-ms');
     this.fpsDotEl = document.getElementById('fps-dot');
     this.fpsBoxEl = document.getElementById('fps-counter');
+    this.reticleEl = document.getElementById('reticle');
 
     this.player = new Player(this.sceneManager.scene);
     this.player.onFootstep = (mode) => this.audioManager.playFootstep(mode);
@@ -1279,7 +1285,8 @@ class Game {
             );
             if (this.player.shieldActive && distToPlayer < 1.65) {
               rLaser.velocity.negate().multiplyScalar(1.25);
-              rLaser.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), rLaser.velocity.clone().normalize());
+              this._tmpDir.copy(rLaser.velocity).normalize();
+              rLaser.mesh.quaternion.setFromUnitVectors(this._unitX, this._tmpDir);
               this.player.takeDamage(0, Math.sign(rLaser.velocity.x) || 1);
               this.audioManager.playShieldDeflect();
               this.sceneManager.triggerShake(0.16, 0.10);
@@ -2248,7 +2255,10 @@ class Game {
       if (this.lockOnMesh) this.lockOnMesh.visible = false;
       if (this.rayBeamGroup) this.rayBeamGroup.visible = false;
       this.lockedEnemy = null;
-      document.getElementById('reticle')?.classList.remove('locked');
+      if (this.reticleLocked && this.reticleEl) {
+        this.reticleEl.classList.remove('locked');
+        this.reticleLocked = false;
+      }
       return;
     }
 
@@ -2319,8 +2329,9 @@ class Game {
       this.lockedEnemy = closestEnemy;
       this.inputManager.mouseWorldTarget.set(bestPosX, bestPosY, bestPosZ);
 
-      // Smoothly snap subtle pulsing lock-on sphere directly around the enemy!
-      this.lockOnMesh.position.lerp(new THREE.Vector3(bestPosX, bestPosY, bestPosZ), Math.min(1, dt * 22.0));
+      // Smoothly snap subtle pulsing lock-on sphere directly around the enemy (Zero-GC!)
+      this._lockTargetPos.set(bestPosX, bestPosY, bestPosZ);
+      this.lockOnMesh.position.lerp(this._lockTargetPos, Math.min(1, dt * 22.0));
       this.lockOnMesh.rotation.y += dt * 2.2;
       this.lockOnMesh.rotation.x += dt * 1.1;
 

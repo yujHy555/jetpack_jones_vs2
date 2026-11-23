@@ -69,6 +69,16 @@ export class DroneEnemy {
   private muzzleFlashOrb!: THREE.Mesh;
   private muzzleFlashTimer: number = 0;
 
+  // Shared static geometries & Zero-GC scratch vectors (eliminates 30s respawn buffer-allocation hitches!)
+  private static _sharedHelmetGeo: THREE.SphereGeometry | null = null;
+  private static _sharedCrestGeo: THREE.BoxGeometry | null = null;
+  private static _sharedVisorRimGeo: THREE.TorusGeometry | null = null;
+  private static _sharedSegGeos: THREE.CylinderGeometry[] | null = null;
+  private static _sharedJointGeos: THREE.SphereGeometry[] | null = null;
+  private static _sharedTipGeo: THREE.SphereGeometry | null = null;
+  private readonly _laserDir = new THREE.Vector3();
+  private readonly _unitX = new THREE.Vector3(1, 0, 0);
+
   constructor(scene: THREE.Scene, startX: number, startY: number = 0.8, patrolRange: number = 6.0, isAlien: boolean = false) {
     this.isAlien = isAlien;
     this.group = new THREE.Group();
@@ -108,9 +118,24 @@ export class DroneEnemy {
     });
     const cyanThrusterMat = new THREE.MeshBasicMaterial({ color: this.isAlien ? 0x39ff14 : 0x00f5ff });
 
-    // 1. Aerodynamic Space Helmet Dome Shell
-    const helmetGeo = new THREE.SphereGeometry(0.46, 24, 24);
-    this.chassisMesh = new THREE.Mesh(helmetGeo, spaceWhiteMat);
+    // 1. Aerodynamic Space Helmet Dome Shell (Shared geometry across all drones!)
+    if (!DroneEnemy._sharedHelmetGeo) {
+      DroneEnemy._sharedHelmetGeo = new THREE.SphereGeometry(0.46, 20, 18);
+      DroneEnemy._sharedCrestGeo = new THREE.BoxGeometry(0.38, 0.08, 0.05);
+      DroneEnemy._sharedVisorRimGeo = new THREE.TorusGeometry(0.38, 0.045, 10, 24);
+      DroneEnemy._sharedSegGeos = [];
+      DroneEnemy._sharedJointGeos = [];
+      for (let s = 0; s < 6; s++) {
+        const topR = 0.042 - s * 0.005;
+        const botR = Math.max(0.012, 0.036 - s * 0.005);
+        const sg = new THREE.CylinderGeometry(topR, botR, 0.22, 6);
+        sg.translate(0, -0.11, 0);
+        DroneEnemy._sharedSegGeos.push(sg);
+        DroneEnemy._sharedJointGeos.push(new THREE.SphereGeometry(topR * 1.05, 6, 6));
+      }
+      DroneEnemy._sharedTipGeo = new THREE.SphereGeometry(0.014, 6, 6);
+    }
+    this.chassisMesh = new THREE.Mesh(DroneEnemy._sharedHelmetGeo, spaceWhiteMat);
     this.group.add(this.chassisMesh);
 
     // LONG WHITE TENTACLES (Dangling underneath EVERY drone in the level!)
@@ -150,22 +175,16 @@ export class DroneEnemy {
           chain.push(segGroup);
         }
 
-        const topR = 0.042 - s * 0.005;
-        const botR = Math.max(0.012, 0.036 - s * 0.005);
-        const segGeo = new THREE.CylinderGeometry(topR, botR, 0.22, 8);
-        segGeo.translate(0, -0.11, 0);
-        const segMesh = new THREE.Mesh(segGeo, whiteTentacleMat);
+        const segMesh = new THREE.Mesh(DroneEnemy._sharedSegGeos![s], whiteTentacleMat);
         segGroup.add(segMesh);
 
         // Rounded spherical knuckle joint
-        const jointGeo = new THREE.SphereGeometry(topR * 1.05, 8, 8);
-        const joint = new THREE.Mesh(jointGeo, whiteTentacleMat);
+        const joint = new THREE.Mesh(DroneEnemy._sharedJointGeos![s], whiteTentacleMat);
         segGroup.add(joint);
 
         // Tip bead at final segment
         if (s === numSegments - 1) {
-          const tipGeo = new THREE.SphereGeometry(botR * 1.1, 8, 8);
-          const tip = new THREE.Mesh(tipGeo, whiteTentacleMat);
+          const tip = new THREE.Mesh(DroneEnemy._sharedTipGeo!, whiteTentacleMat);
           tip.position.set(0, -0.22, 0);
           segGroup.add(tip);
         }
@@ -175,12 +194,12 @@ export class DroneEnemy {
     }
 
     // 2. Top Centerline Crest Fin
-    const crest = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.08, 0.05), darkHarnessMat);
+    const crest = new THREE.Mesh(DroneEnemy._sharedCrestGeo!, darkHarnessMat);
     crest.position.set(-0.02, 0.44, 0);
     this.chassisMesh.add(crest);
 
     // 3. Panoramic Front Visor Seal Rim
-    const visorRim = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.045, 12, 28), darkHarnessMat);
+    const visorRim = new THREE.Mesh(DroneEnemy._sharedVisorRimGeo!, darkHarnessMat);
     visorRim.rotation.y = Math.PI / 2;
     visorRim.position.set(0.08, 0, 0);
     this.chassisMesh.add(visorRim);
@@ -761,7 +780,7 @@ export class DroneEnemy {
 
     const speed = 18.5;
     if (is3D) {
-      const dir = new THREE.Vector3(
+      const dir = this._laserDir.set(
         targetX - laser.position.x,
         targetY - laser.position.y,
         targetZ - laser.position.z
@@ -769,7 +788,7 @@ export class DroneEnemy {
       if (dir.lengthSq() > 0.001) dir.normalize();
       else dir.set(-1, 0, 0);
       laser.velocity.copy(dir).multiplyScalar(speed);
-      laser.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
+      laser.mesh.quaternion.setFromUnitVectors(this._unitX, dir);
     } else {
       const angle = Math.atan2(targetY - laser.position.y, targetX - laser.position.x);
       laser.velocity.set(Math.cos(angle) * speed, Math.sin(angle) * speed, 0);

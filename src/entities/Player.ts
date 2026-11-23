@@ -647,6 +647,12 @@ export class Player {
   private jetpackVfx!: JetpackThrusterVFX;
   private readonly nozzleWorldL = new THREE.Vector3();
   private readonly nozzleWorldR = new THREE.Vector3();
+  // Zero-GC scratch vectors for rapid-fire shooting
+  private readonly _shootMuzzlePos = new THREE.Vector3();
+  private readonly _shootFallbackPos = new THREE.Vector3();
+  private readonly _shootDir = new THREE.Vector3();
+  private readonly _shootToTarget = new THREE.Vector3();
+  private readonly _shootUnitX = new THREE.Vector3(1, 0, 0);
   private hipBone: THREE.Group;
 
   // Next-Gen Triple-AAA Character Controller & Double Jump State
@@ -2222,7 +2228,7 @@ export class Player {
     // Sync mesh position & full world matrix chain BEFORE and AFTER triggerShoot so gunMuzzleTip is exact to the millimeter!
     this.mesh.position.copy(this.position);
     this.mesh.updateWorldMatrix(true, true);
-    const muzzlePos = new THREE.Vector3();
+    const muzzlePos = this._shootMuzzlePos;
     const is3D = Boolean(this.mixamoRig?.use3DForwardAim);
     if (this.mixamoRig?.isLoaded) {
       let aimPitch3D = 0;
@@ -2242,9 +2248,12 @@ export class Player {
       this.mixamoRig.triggerShoot(is3D ? aimPitch3D : aimAngle);
       this.mesh.updateWorldMatrix(true, true);
       this.onHaptic?.(42, 0.34, 0.22);
-      const barrelTip = this.mixamoRig.getMuzzleWorldPosition(
-        new THREE.Vector3(this.position.x + (this.facingRight ? 0.65 : -0.65), this.position.y + 1.38, this.position.z)
+      this._shootFallbackPos.set(
+        this.position.x + (this.facingRight ? 0.65 : -0.65),
+        this.position.y + 1.38,
+        this.position.z
       );
+      const barrelTip = this.mixamoRig.getMuzzleWorldPosition(this._shootFallbackPos);
       muzzlePos.copy(barrelTip);
       if (!is3D) muzzlePos.z = 0; // Keep laser strictly on z = 0 plane in 2D Level 1!
     } else {
@@ -2253,10 +2262,10 @@ export class Player {
 
     laser.position.copy(muzzlePos);
     if (is3D) {
-      // Derive exact 3D barrel forward direction from Jones's live container world +X axis
-      const dir = new THREE.Vector3(1, 0, 0).transformDirection(this.mixamoRig.container.matrixWorld).normalize();
+      // Derive exact 3D barrel forward direction from Jones's live container world +X axis (Zero-GC!)
+      const dir = this._shootDir.set(1, 0, 0).transformDirection(this.mixamoRig.container.matrixWorld).normalize();
       if (aimTargetWorld) {
-        const toTarget = new THREE.Vector3().subVectors(aimTargetWorld, muzzlePos);
+        const toTarget = this._shootToTarget.subVectors(aimTargetWorld, muzzlePos);
         if (toTarget.lengthSq() > 0.04) {
           toTarget.normalize();
           if (toTarget.dot(dir) > 0.25) dir.copy(toTarget);
@@ -2264,7 +2273,7 @@ export class Player {
       }
       laser.velocity.copy(dir).multiplyScalar(42);
       // Quaternion alignment guarantees 100% collinearity with 3D direction (zero Euler gimbal offset!)
-      laser.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
+      laser.mesh.quaternion.setFromUnitVectors(this._shootUnitX, dir);
     } else {
       laser.velocity.set(Math.cos(aimAngle) * 42, Math.sin(aimAngle) * 42, 0);
       laser.mesh.rotation.set(0, 0, aimAngle);

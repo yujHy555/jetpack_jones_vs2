@@ -404,6 +404,8 @@ export class SceneManager {
       this.ambientLight.intensity = 2.6;
       this.keyLight.color.setHex(0xffaa85);
       this.keyLight.intensity = 1.8;
+      this.keyLight.castShadow = false;
+      this.renderer.shadowMap.autoUpdate = false;
       this.rimLight.color.setHex(0x44ccff);
       this.rimLight.intensity = 1.2;
     } else if (lvl === 2) {
@@ -414,6 +416,7 @@ export class SceneManager {
       this.keyLight.color.setHex(0xfff4dc);
       this.keyLight.intensity = 2.65;
       this.keyLight.castShadow = true; // Real AAA character shadows in Level 2!
+      this.renderer.shadowMap.autoUpdate = true;
       this.keyLight.shadow.bias = -0.0004;
       this.keyLight.shadow.normalBias = 0.018;
       this.rimLight.color.setHex(0x88ccff);
@@ -425,6 +428,7 @@ export class SceneManager {
       this.keyLight.color.setHex(0xfff8ee);
       this.keyLight.intensity = 1.4;
       this.keyLight.castShadow = false;
+      this.renderer.shadowMap.autoUpdate = false; // Zero shadow-map pass overhead in Level 1!
       this.rimLight.color.setHex(0x88eeff);
       this.rimLight.intensity = 1.0;
     }
@@ -634,6 +638,8 @@ export class SceneManager {
   }
 
   public render(isHangar: boolean = false) {
+    // Enable real-time shadow map updates in Level 2 & Hangar; bypass completely in Level 1 for max FPS!
+    this.renderer.shadowMap.autoUpdate = isHangar || this.currentLevel === 2;
     const activeCam = this.getActiveCamera(isHangar);
     // 0.00ms overhead bypass when BOTH Pixel-Art Shader and Hangar DOF are OFF!
     if (!this.pixelArtEnabled && !this.dofEnabled) {

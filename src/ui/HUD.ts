@@ -14,6 +14,9 @@ export class HUD {
   private lifeSegments: HTMLElement[] = [];
   private fuelSegments: HTMLElement[] = [];
   private totalSegments = 10;
+  private lastRenderedScore: number = -1;
+  private lastRenderedLifeSegs: number = -1;
+  private lastRenderedFuelSegs: number = -1;
 
   constructor() {
     this.scoreEl = document.getElementById('hud-score');
@@ -50,40 +53,36 @@ export class HUD {
   }
 
   public update(score: number, life: number, fuel: number) {
-    // 1. Score display (6 digits)
-    if (this.scoreEl) {
-      this.scoreEl.textContent = Math.floor(score).toString().padStart(6, '0');
+    // 1. Score display (6 digits) — dirty-checked to avoid per-frame DOM text reflows!
+    const intScore = Math.floor(score);
+    if (this.scoreEl && intScore !== this.lastRenderedScore) {
+      this.lastRenderedScore = intScore;
+      this.scoreEl.textContent = intScore.toString().padStart(6, '0');
     }
 
-    // 2. Life Bar segments
+    // 2. Life Bar segments — only touch DOM when active segment count actually changes!
     const activeLifeSegments = Math.round((life / 100) * this.totalSegments);
-    for (let i = 0; i < this.totalSegments; i++) {
-      const seg = this.lifeSegments[i];
-      if (i < activeLifeSegments) {
-        seg.className = 'gauge-segment segment-life active';
-        if (activeLifeSegments <= 2) {
-          seg.classList.add('low');
-        }
-      } else {
-        seg.className = 'gauge-segment segment-life';
+    if (activeLifeSegments !== this.lastRenderedLifeSegs) {
+      this.lastRenderedLifeSegs = activeLifeSegments;
+      const isLow = activeLifeSegments <= 2;
+      for (let i = 0; i < this.totalSegments; i++) {
+        const seg = this.lifeSegments[i];
+        seg.className = i < activeLifeSegments
+          ? (isLow ? 'gauge-segment segment-life active low' : 'gauge-segment segment-life active')
+          : 'gauge-segment segment-life';
       }
     }
 
-    // 3. Fuel Bar segments
+    // 3. Fuel Bar segments — only touch DOM when active segment count actually changes!
     const activeFuelSegments = Math.round((fuel / 100) * this.totalSegments);
-    for (let i = 0; i < this.totalSegments; i++) {
-      const seg = this.fuelSegments[i];
-      if (i < activeFuelSegments) {
-        seg.className = 'gauge-segment segment-fuel active';
-        if (activeFuelSegments > 6) {
-          seg.classList.add('full'); // Green
-        } else if (activeFuelSegments > 2) {
-          seg.classList.add('mid'); // Yellow
-        } else {
-          seg.classList.add('low'); // Orange/Red warning flash
-        }
-      } else {
-        seg.className = 'gauge-segment segment-fuel';
+    if (activeFuelSegments !== this.lastRenderedFuelSegs) {
+      this.lastRenderedFuelSegs = activeFuelSegments;
+      const fuelTier = activeFuelSegments > 6 ? ' full' : (activeFuelSegments > 2 ? ' mid' : ' low');
+      for (let i = 0; i < this.totalSegments; i++) {
+        const seg = this.fuelSegments[i];
+        seg.className = i < activeFuelSegments
+          ? `gauge-segment segment-fuel active${fuelTier}`
+          : 'gauge-segment segment-fuel';
       }
     }
   }

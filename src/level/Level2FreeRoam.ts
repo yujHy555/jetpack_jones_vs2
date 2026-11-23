@@ -343,52 +343,54 @@ export class Level2FreeRoam {
     return { x, z, surface };
   }
 
+  private readonly _surfOut: Level2SurfaceInfo = { height: GROUND_Y, slopeAngleX: 0, slopeAngleZ: 0, conveyorVx: 0, conveyorVz: 0 };
+  private readonly _rayOut = { x: 0, y: 0, z: 0, surfaceHeight: GROUND_Y };
+  private readonly _camOut = { x: 0, y: 0, z: 0 };
+  private readonly _flyOut = { x: 0, y: 0, z: 0, surfaceHeight: GROUND_Y };
+
   /**
-   * Exact analytical surface height, 30° slope angle, and conveyor belt velocity at any world (x, z)
+   * Exact analytical surface height, 30° slope angle, and conveyor belt velocity at any world (x, z) — Zero-GC!
    */
   public getSurfaceInfo(x: number, z: number, pad: number = 0.22): Level2SurfaceInfo {
+    const out = this._surfOut;
     // 1. Moving Conveyor Belt at start (x = -2..12, z = -1.6..1.6) — padded tightly so boots NEVER sink into edges!
     if (x >= this.convMinX - pad && x <= this.convMaxX + pad && Math.abs(z) <= this.convHalfZ + pad * 0.6) {
-      return {
-        height: GROUND_Y + this.convHeight,
-        slopeAngleX: 0,
-        slopeAngleZ: 0,
-        conveyorVx: this.convSpeed,
-        conveyorVz: 0
-      };
+      out.height = GROUND_Y + this.convHeight;
+      out.slopeAngleX = 0;
+      out.slopeAngleZ = 0;
+      out.conveyorVx = this.convSpeed;
+      out.conveyorVz = 0;
+      return out;
     }
 
     // 2. Exact 30° Test Ramp (x = 16..22, z = -2.6..2.6)
     if (x >= this.rampStartX && x <= this.rampEndX && Math.abs(z) <= this.rampHalfZ + pad * 0.4) {
       const t = (x - this.rampStartX) / (this.rampEndX - this.rampStartX);
-      return {
-        height: GROUND_Y + t * this.rampTopHeight,
-        slopeAngleX: this.rampAngleRad,
-        slopeAngleZ: 0,
-        conveyorVx: 0,
-        conveyorVz: 0
-      };
+      out.height = GROUND_Y + t * this.rampTopHeight;
+      out.slopeAngleX = this.rampAngleRad;
+      out.slopeAngleZ = 0;
+      out.conveyorVx = 0;
+      out.conveyorVz = 0;
+      return out;
     }
 
     // 3. Elevated Landing Deck at top of the 30° Ramp (x = 22..28, z = -2.6..2.6)
     if (x > this.rampEndX && x <= this.deckEndX + pad * 0.4 && Math.abs(z) <= this.rampHalfZ + pad * 0.4) {
-      return {
-        height: GROUND_Y + this.rampTopHeight,
-        slopeAngleX: 0,
-        slopeAngleZ: 0,
-        conveyorVx: 0,
-        conveyorVz: 0
-      };
+      out.height = GROUND_Y + this.rampTopHeight;
+      out.slopeAngleX = 0;
+      out.slopeAngleZ = 0;
+      out.conveyorVx = 0;
+      out.conveyorVz = 0;
+      return out;
     }
 
     // 4. Flat Blue & White Platform Tile Floor
-    return {
-      height: GROUND_Y,
-      slopeAngleX: 0,
-      slopeAngleZ: 0,
-      conveyorVx: 0,
-      conveyorVz: 0
-    };
+    out.height = GROUND_Y;
+    out.slopeAngleX = 0;
+    out.slopeAngleZ = 0;
+    out.conveyorVx = 0;
+    out.conveyorVz = 0;
+    return out;
   }
 
   /**
@@ -446,11 +448,15 @@ export class Level2FreeRoam {
       y = minAllowedY;
     }
 
-    return { x, y, z, surfaceHeight: surf.height };
+    this._flyOut.x = x;
+    this._flyOut.y = y;
+    this._flyOut.z = z;
+    this._flyOut.surfaceHeight = surf.height;
+    return this._flyOut;
   }
 
   /**
-   * Swept 3D Segment Surface Raycast for Fast Lasers/Bullets:
+   * Swept 3D Segment Surface Raycast for Fast Lasers/Bullets (Zero-GC!):
    * Samples along prev -> cur so fast bolts NEVER tunnel through the 30° ramp, landing deck, conveyor, or floor!
    */
   public raycastSurfaceHit(
@@ -469,7 +475,11 @@ export class Level2FreeRoam {
       const sz = prevZ + (curZ - prevZ) * t;
       const surf = this.getSurfaceInfo(sx, sz, 0.08);
       if (sy <= surf.height + 0.08) {
-        return { x: sx, y: Math.max(sy, surf.height + 0.04), z: sz, surfaceHeight: surf.height };
+        this._rayOut.x = sx;
+        this._rayOut.y = Math.max(sy, surf.height + 0.04);
+        this._rayOut.z = sz;
+        this._rayOut.surfaceHeight = surf.height;
+        return this._rayOut;
       }
     }
     return null;
@@ -513,7 +523,10 @@ export class Level2FreeRoam {
     if (ry < finalSurf.height + minClearance) {
       ry = finalSurf.height + minClearance;
     }
-    return { x: rx, y: ry, z: rz };
+    this._camOut.x = rx;
+    this._camOut.y = ry;
+    this._camOut.z = rz;
+    return this._camOut;
   }
 
   public update(dt: number) {
