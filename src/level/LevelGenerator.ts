@@ -4,8 +4,8 @@ import { ObstacleManager } from './Obstacles';
 export class LevelGenerator {
   private obstacleManager: ObstacleManager;
   public currentLevel: number = 1;
-  private nextSpawnX: number = 18;
-  private spawnInterval: number = 16;
+  private nextSpawnX: number = 22;
+  private spawnInterval: number = 22; // Generous spacious rhythm between all scene elements!
 
   constructor(obstacleManager: ObstacleManager, scene?: THREE.Scene) {
     this.obstacleManager = obstacleManager;
@@ -18,57 +18,46 @@ export class LevelGenerator {
 
   public reset(startX: number = 0) {
     this.obstacleManager.clear();
-    this.nextSpawnX = startX + 18;
+    this.nextSpawnX = startX + 22;
 
     if (this.currentLevel === 1) {
       // ----------------------------------------------------
-      // LEVEL 1: INDUSTRIAL COMPLEX
+      // LEVEL 1: INDUSTRIAL COMPLEX (Spacious layout; Door 1 at x=14.0 kept 100% clear!)
       // ----------------------------------------------------
-      // Initial training catwalk platform (x = 5 to 11)
-      this.obstacleManager.spawnPlatform(8, -1.8, 6.0, 0.5);
-      this.spawnCoinLine(6, -0.8, 3);
-      this.obstacleManager.spawnFuelPickup(11, -0.6);
+      // Initial training catwalk platform (x = 4 to 9.5 — well clear of Door 1 at x = 14.0!)
+      this.obstacleManager.spawnPlatform(6.8, -1.8, 5.2, 0.5);
+      this.spawnCoinLine(5.0, -0.8, 3);
+      this.obstacleManager.spawnFuelPickup(9.2, -0.6);
 
       // High Sky Fuel Canister to reward early vertical exploration!
-      this.obstacleManager.spawnFuelPickup(13, 6.5);
-      this.obstacleManager.spawnFuelPickup(15, 12.0);
+      this.obstacleManager.spawnFuelPickup(14.0, 6.8);
+      this.obstacleManager.spawnFuelPickup(19.0, 12.0);
 
-      // Interactive Physics Supply Crates
-      this.obstacleManager.spawnCrate(3.5, -3.2);
-      this.obstacleManager.spawnCrate(9.5, -1.3);
+      // Interactive Physics Supply Crates (well spaced)
+      this.obstacleManager.spawnCrate(3.2, -3.2);
+      this.obstacleManager.spawnCrate(7.2, -1.3);
 
-      // Tactical Modern Cover Barrier placed safely in open runway (NEVER under platforms!)
-      this.obstacleManager.spawnCoverBarrier(13.0, -3.70);
+      // Tactical Modern Cover Barrier placed cleanly past Door 1 (x = 20.5)
+      this.obstacleManager.spawnCoverBarrier(20.5, -3.70);
 
-      // Aerial Attack Drone bot in air! (Helmet-styled)
-      this.obstacleManager.spawnDrone(16.5, 0.9, 4.0);
-
-      // Hyper-Ion Jetpack Upgrade placed early so player can experience high-thrust flight
-      this.obstacleManager.spawnHyperJetpackPickup(20.0, 0.5);
+      // Hyper-Ion Jetpack Upgrade placed in open airspace past Door 1
+      this.obstacleManager.spawnHyperJetpackPickup(24.0, 0.6);
     } else if (this.currentLevel === 2) {
       // ----------------------------------------------------
       // LEVEL 2: PLANET XYLOS - BIOLUMINESCENT ALIEN PLANET
       // ----------------------------------------------------
-      // Alien Cyber Sentinel: Modern Canine Robotic Stalker
-      this.obstacleManager.spawnAlienCyberSentinel(10.5, -3.70);
-
       // Early Metallic Retro Jetpack Upgrade Pickup!
       this.obstacleManager.spawnHyperJetpackPickup(3.5, -1.8);
 
-      // Floating Alien Crystal Platform guarded by Cyber Sentinel
+      // Floating Alien Crystal Platform
       this.obstacleManager.spawnPlatform(15.0, -1.2, 5.5, 0.5);
-      this.obstacleManager.spawnAlienCyberSentinel(16.5, -0.95);
       this.spawnCoinLine(13.5, -0.2, 3);
       this.obstacleManager.spawnFuelPickup(17.5, 0.2);
-
-      // Alien Drifter Bio-Enemy in flight!
-      this.obstacleManager.spawnDrone(15.0, 2.5, 4.5, true);
 
       // Modern Cover Barrier in open ground (clear of any platforms)
       this.obstacleManager.spawnCoverBarrier(20.0, -3.70);
 
       // HIGH-ALTITUDE ALIEN SKY MAZE: Lethal Bio-Plasma Walls & Rich Collectibles!
-      // Touching any wall of the maze instantly kills the player!
       this.obstacleManager.spawnSkyMaze(23.0, 4.5);
     } else {
       // ----------------------------------------------------
@@ -85,13 +74,7 @@ export class LevelGenerator {
 
       // High Sky Fuel Canister over canyon chasm
       this.obstacleManager.spawnFuelPickup(14.0, 7.5);
-
-      // Martian Cyber Sentinel patrolling ground runway
-      this.obstacleManager.spawnAlienCyberSentinel(17.5, -3.70);
       this.obstacleManager.spawnCoverBarrier(15.0, -3.70);
-
-      // Aerial Martian Sentry Drone with tentacles
-      this.obstacleManager.spawnDrone(18.0, 2.2, 4.0, true);
 
       // Supply Crate
       this.obstacleManager.spawnCrate(7.0, -1.3);
@@ -100,12 +83,29 @@ export class LevelGenerator {
 
   public update(playerX: number) {
     while (this.nextSpawnX < playerX + 65) {
+      // Keep the opening 0..48m runway clean of enemies so player can test movement & Pixel Portals first!
+      const allowEnemies = this.nextSpawnX >= 48;
+      const origSpawnDrone = this.obstacleManager.spawnDrone.bind(this.obstacleManager);
+      const origSpawnSentinel = this.obstacleManager.spawnAlienCyberSentinel.bind(this.obstacleManager);
+      if (!allowEnemies) {
+        (this.obstacleManager as any).spawnDrone = () => null;
+        (this.obstacleManager as any).spawnAlienCyberSentinel = () => null;
+      }
+
       if (this.currentLevel === 1) {
         this.generateChunkLevel1(this.nextSpawnX);
       } else if (this.currentLevel === 2) {
         this.generateChunkLevel2(this.nextSpawnX);
       } else {
         this.generateChunkLevel3(this.nextSpawnX);
+      }
+
+      if (!allowEnemies) {
+        (this.obstacleManager as any).spawnDrone = origSpawnDrone;
+        (this.obstacleManager as any).spawnAlienCyberSentinel = origSpawnSentinel;
+      } else if (Math.floor(this.nextSpawnX / this.spawnInterval) % 2 === 0) {
+        // Spawn our Next-Gen Translucent Sliding Acid-Lime Slime Blob on the ground runway further down!
+        this.obstacleManager.spawnEnemyBlob(this.nextSpawnX + 4.5, -3.70, 5.5);
       }
       this.nextSpawnX += this.spawnInterval;
     }

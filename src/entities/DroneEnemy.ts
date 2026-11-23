@@ -88,14 +88,14 @@ export class DroneEnemy {
       metalness: 0.85,
       roughness: 0.18,
     });
-    const rubyVisorMat = new THREE.MeshPhysicalMaterial({
+    const rubyVisorMat = new THREE.MeshStandardMaterial({
       color: this.isAlien ? 0x00e676 : 0xff1133,
-      emissive: this.isAlien ? 0x004d20 : 0x660011,
+      emissive: this.isAlien ? 0x00662a : 0x880018,
+      emissiveIntensity: 0.75,
       roughness: 0.12,
-      metalness: 0.10,
-      transmission: 0.75,
+      metalness: 0.20,
       transparent: true,
-      opacity: 0.88,
+      opacity: 0.86,
     });
     const cyanThrusterMat = new THREE.MeshBasicMaterial({ color: this.isAlien ? 0x39ff14 : 0x00f5ff });
 

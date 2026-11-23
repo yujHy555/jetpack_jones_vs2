@@ -26,7 +26,6 @@ export interface ActiveMeteor {
   rotationSpeed: THREE.Vector3;
   radius: number;
   active: boolean;
-  pointLight: THREE.PointLight;
   age: number;
 }
 
@@ -266,11 +265,7 @@ export class MeteorManager {
       }
     }
 
-    // Dynamic Point Light illuminating the descent path
-    const lightColor = type === MeteorType.ROCK ? 0xff5500 : 0x00f5ff;
-    const pointLight = new THREE.PointLight(lightColor, 24, 18, 1.2);
-    group.add(pointLight);
-
+    // Zero-stall: no dynamic THREE.PointLight added mid-run (prevents global shader recompilation freezes!)
     this.scene.add(group);
 
     // Fast, angled downward trajectory
@@ -290,7 +285,6 @@ export class MeteorManager {
       ),
       radius,
       active: true,
-      pointLight,
       age: 0,
     });
   }

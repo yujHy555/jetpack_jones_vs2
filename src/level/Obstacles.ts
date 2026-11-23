@@ -115,6 +115,7 @@ export class ObstacleManager {
   // Pickup Particle FX Pools
   private fxParticles: PickupFXParticle[] = [];
   private fxShockwaves: PickupFXShockwave[] = [];
+  private fxPillars: PickupFXShockwave[] = [];
 
   // Cached Materials
   private steelMat: THREE.MeshStandardMaterial;
@@ -122,7 +123,7 @@ export class ObstacleManager {
   private bronzeMat: THREE.MeshStandardMaterial;
   private hazardMat: THREE.MeshStandardMaterial;
   private outpostPlatformMat: THREE.MeshStandardMaterial;
-  private plasmaGlassMat: THREE.MeshPhysicalMaterial;
+  private plasmaGlassMat: THREE.MeshStandardMaterial;
   private plasmaCoreMat: THREE.MeshBasicMaterial;
 
   constructor(scene: THREE.Scene) {
@@ -206,14 +207,12 @@ export class ObstacleManager {
       metalness: 0.25,
     });
 
-    this.plasmaGlassMat = new THREE.MeshPhysicalMaterial({
-      color: 0x111111,
-      metalness: 0.1,
-      roughness: 0.05,
-      transmission: 0.85,
+    this.plasmaGlassMat = new THREE.MeshStandardMaterial({
+      color: 0x1a2228,
+      metalness: 0.25,
+      roughness: 0.08,
       transparent: true,
-      opacity: 0.7,
-      reflectivity: 0.9,
+      opacity: 0.52,
     });
 
     this.plasmaCoreMat = new THREE.MeshBasicMaterial({
@@ -222,11 +221,11 @@ export class ObstacleManager {
 
     // Initialize Pickup Particle FX Pools
     const pGeo = new THREE.SphereGeometry(0.12, 8, 8);
-    for (let i = 0; i < 48; i++) {
+    for (let i = 0; i < 96; i++) {
       const pMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5ff,
+        color: 0xb6ff3b,
         transparent: true,
-        opacity: 0.9,
+        opacity: 0.95,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
@@ -237,18 +236,18 @@ export class ObstacleManager {
         mesh,
         velocity: new THREE.Vector3(),
         age: 0,
-        maxLife: 0.5,
+        maxLife: 0.55,
         baseScale: 1.0,
         active: false,
       });
     }
 
-    const swGeo = new THREE.RingGeometry(0.25, 0.45, 24);
-    for (let i = 0; i < 8; i++) {
+    const swGeo = new THREE.RingGeometry(0.24, 0.44, 28);
+    for (let i = 0; i < 24; i++) {
       const swMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5ff,
+        color: 0xb6ff3b,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.9,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         depthWrite: false,
@@ -259,7 +258,30 @@ export class ObstacleManager {
       this.fxShockwaves.push({
         mesh,
         age: 0,
-        maxLife: 0.35,
+        maxLife: 0.42,
+        active: false,
+      });
+    }
+
+    // 1979 Arcade Vertical Plasma Absorption Pillars (pooled, 0 runtime allocations!)
+    const pillarGeo = new THREE.CylinderGeometry(0.06, 0.32, 3.4, 12, 1, true);
+    pillarGeo.translate(0, 1.7, 0);
+    for (let i = 0; i < 8; i++) {
+      const pilMat = new THREE.MeshBasicMaterial({
+        color: 0xb6ff3b,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(pillarGeo, pilMat);
+      mesh.visible = false;
+      this.scene.add(mesh);
+      this.fxPillars.push({
+        mesh,
+        age: 0,
+        maxLife: 0.42,
         active: false,
       });
     }
@@ -289,6 +311,10 @@ export class ObstacleManager {
       sw.active = false;
       sw.mesh.visible = false;
     }
+    for (const pil of this.fxPillars) {
+      pil.active = false;
+      pil.mesh.visible = false;
+    }
     this.obstacles = [];
     this.pickups = [];
     this.enemies = [];
@@ -311,6 +337,12 @@ export class ObstacleManager {
   }
 
   public spawnBlob(x: number, y: number, patrolRange: number = 3.5): EnemyBlob {
+    const blob = new EnemyBlob(this.scene, x, y, patrolRange);
+    this.enemies.push(blob);
+    return blob;
+  }
+
+  public spawnEnemyBlob(x: number, y: number = -3.70, patrolRange: number = 5.0): EnemyBlob {
     const blob = new EnemyBlob(this.scene, x, y, patrolRange);
     this.enemies.push(blob);
     return blob;
@@ -796,16 +828,16 @@ export class ObstacleManager {
     barrierMesh.position.set(0, (bHeight * 0.72) / 2, 0);
     group.add(barrierMesh);
 
-    // 2. Translucent Electric Cyan Holographic Blast Shield Plate across top
+    // 2. Translucent Electric Cyan Holographic Blast Shield Plate across top (Zero-Transmission = 0ms stall!)
     const shieldPlateGeo = new THREE.BoxGeometry(bWidth - 0.08, bHeight * 0.38, 0.12);
-    const shieldPlateMat = new THREE.MeshPhysicalMaterial({
+    const shieldPlateMat = new THREE.MeshStandardMaterial({
       color: 0x00f0ff,
-      emissive: 0x003344,
-      roughness: 0.08,
-      metalness: 0.15,
-      transmission: 0.75,
+      emissive: 0x005577,
+      emissiveIntensity: 0.65,
+      roughness: 0.10,
+      metalness: 0.18,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.58,
     });
     const shieldPlate = new THREE.Mesh(shieldPlateGeo, shieldPlateMat);
     shieldPlate.position.set(0, bHeight - (bHeight * 0.38) / 2, 0);
@@ -1493,10 +1525,7 @@ export class ObstacleManager {
     const lightning = new THREE.Mesh(lightningGeo, this.plasmaCoreMat);
     group.add(lightning);
 
-    // Orange Glow Light
-    const glowLight = new THREE.PointLight(0xff7700, 4.0, 6);
-    group.add(glowLight);
-
+    // Zero-stall: no dynamic PointLight added mid-run (prevents global shader recompilation freezes!)
     this.scene.add(group);
 
     const obs: ActiveObstacle = {
@@ -1514,7 +1543,6 @@ export class ObstacleManager {
         // Pulsate energy lightning inside
         const flicker = 0.8 + Math.sin(time * 25) * 0.2 + Math.random() * 0.15;
         lightning.scale.set(flicker, 1.0, flicker);
-        glowLight.intensity = flicker * 5.0;
       },
     };
 
@@ -1746,57 +1774,53 @@ export class ObstacleManager {
     const group = new THREE.Group();
     group.position.set(x, y, 0);
 
-    // 1. Outer Beveled Metallic Gold Ring with Tech Notches
-    const outerGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.08, 24);
+    // 1. 1979 Retro-Space Sunset Orange & Chrome Outer Data Ring
+    const outerGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.09, 24);
     outerGeo.rotateX(Math.PI / 2);
-    const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xffbb22,
-      emissive: 0x442200,
-      metalness: 0.95,
-      roughness: 0.18,
+    const retroOrangeMat = new THREE.MeshStandardMaterial({
+      color: 0xff7f2a,
+      emissive: 0x662200,
+      metalness: 0.85,
+      roughness: 0.16,
     });
-    const outerMedallion = new THREE.Mesh(outerGeo, goldMat);
+    const outerMedallion = new THREE.Mesh(outerGeo, retroOrangeMat);
     group.add(outerMedallion);
 
-    // Outer edge tech notches
-    const notchGeo = new THREE.BoxGeometry(0.08, 0.10, 0.10);
-    for (let n = 0; n < 8; n++) {
-      const angle = (n / 8) * Math.PI * 2;
-      const notch = new THREE.Mesh(notchGeo, this.darkIronMat);
-      notch.position.set(Math.cos(angle) * 0.38, Math.sin(angle) * 0.38, 0);
-      notch.rotation.z = angle;
-      group.add(notch);
-    }
+    // Tilted 1979 Flamingo-Pink Saturn Orbit Ring!
+    const orbitRingGeo = new THREE.TorusGeometry(0.50, 0.032, 8, 28);
+    const orbitRingMat = new THREE.MeshBasicMaterial({
+      color: 0xff55b8,
+      transparent: true,
+      opacity: 0.92,
+      blending: THREE.AdditiveBlending,
+    });
+    const orbitRing = new THREE.Mesh(orbitRingGeo, orbitRingMat);
+    orbitRing.rotation.set(1.15, 0.35, 0);
+    group.add(orbitRing);
 
-    // 2. Counter-Rotating Inner Holographic Core
+    // 2. Counter-Rotating Electric Lime-Green Holographic Core
     const coreGroup = new THREE.Group();
     group.add(coreGroup);
 
-    const innerGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.09, 16);
-    innerGeo.rotateX(Math.PI / 2);
+    const innerGeo = new THREE.OctahedronGeometry(0.24, 0);
     const innerMat = new THREE.MeshBasicMaterial({
-      color: 0xffd200,
+      color: 0xb6ff3b,
       transparent: true,
-      opacity: 0.90,
+      opacity: 0.95,
       blending: THREE.AdditiveBlending,
     });
     const innerCore = new THREE.Mesh(innerGeo, innerMat);
     coreGroup.add(innerCore);
 
-    // Embossed Central "JJ" Insignia Bars
-    const jjBarGeo = new THREE.BoxGeometry(0.06, 0.22, 0.11);
-    const jjBar1 = new THREE.Mesh(jjBarGeo, this.steelMat);
-    jjBar1.position.set(-0.06, 0, 0);
-    coreGroup.add(jjBar1);
+    // Chrome inner bezel band
+    const bezelGeo = new THREE.TorusGeometry(0.38, 0.036, 8, 24);
+    const bezelMesh = new THREE.Mesh(bezelGeo, this.steelMat);
+    group.add(bezelMesh);
 
-    const jjBar2 = new THREE.Mesh(jjBarGeo, this.steelMat);
-    jjBar2.position.set(0.06, 0, 0);
-    coreGroup.add(jjBar2);
-
-    // 3. Pulsing Holographic Energy Halo Ring
-    const haloGeo = new THREE.RingGeometry(0.44, 0.54, 28);
+    // 3. Pulsing 1979 Acid-Lime Energy Halo Ring
+    const haloGeo = new THREE.RingGeometry(0.46, 0.58, 28);
     const haloMat = new THREE.MeshBasicMaterial({
-      color: 0xffaa00,
+      color: 0xa6ff38,
       transparent: true,
       opacity: 0.55,
       blending: THREE.AdditiveBlending,
@@ -1857,6 +1881,14 @@ export class ObstacleManager {
       }
     }
     return list;
+  }
+
+  public setAllVisible(visible: boolean) {
+    for (const o of this.obstacles) if (o.group) o.group.visible = visible && o.active;
+    for (const p of this.pickups) if (p.mesh) p.mesh.visible = visible && p.active;
+    for (const c of this.crates) if (c.group) c.group.visible = visible && c.active && !c.isDestroyed;
+    for (const e of this.enemies) if (e.group) e.group.visible = visible && e.active;
+    for (const d of this.drones) if (d.group) d.group.visible = visible && d.active;
   }
 
   public getPlatforms(): { x: number; y: number; width: number; height: number }[] {
@@ -2006,15 +2038,31 @@ export class ObstacleManager {
     for (const sw of this.fxShockwaves) {
       if (!sw.active) continue;
       sw.age += dt;
+      if (sw.age < 0) continue; // Staggered concentric launch delay!
       if (sw.age >= sw.maxLife) {
         sw.active = false;
         sw.mesh.visible = false;
         continue;
       }
       const prog = sw.age / sw.maxLife;
-      const s = 0.35 + Math.sin(prog * Math.PI * 0.5) * 3.6;
+      const s = 0.35 + Math.sin(prog * Math.PI * 0.5) * 4.6;
       sw.mesh.scale.set(s, s, s);
-      (sw.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 1.0 - prog);
+      (sw.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (1.0 - prog) * (1.0 - prog));
+    }
+
+    for (const pil of this.fxPillars) {
+      if (!pil.active) continue;
+      pil.age += dt;
+      if (pil.age >= pil.maxLife) {
+        pil.active = false;
+        pil.mesh.visible = false;
+        continue;
+      }
+      const prog = pil.age / pil.maxLife;
+      const widthS = (1.0 - prog) * 1.45 + 0.15;
+      const heightS = 0.45 + prog * 1.95;
+      pil.mesh.scale.set(widthS, heightS, widthS);
+      (pil.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (1.0 - prog) * 0.85);
     }
 
     // Resolve non-intersection collisions between enemies, drones, crates, and obstacles
@@ -2022,43 +2070,65 @@ export class ObstacleManager {
   }
 
   /**
-   * Spawns AAA Particle Burst & Shockwave Ring on Collectible Pickup
+   * 10x Next-Gen 1979 Retro-Space Collectible Celebration Burst:
+   * - 3 Staggered Concentric Shockwave Rings (Lime -> Sunset Orange -> Flamingo Pink!)
+   * - Vertical Holographic Arcade Teleport Light Pillar
+   * - 36 Radiant Spiraling 1979 Starburst Sparks!
    */
   public spawnPickupFX(x: number, y: number, type: PickupType) {
-    // 1. Expanding Shockwave Ring
-    const sw = this.fxShockwaves.find(s => !s.active);
-    if (sw) {
+    const palette = type === PickupType.FUEL
+      ? [0x00f5ff, 0xb6ff3b, 0xffffff]
+      : [0xb6ff3b, 0xff7f2a, 0xff55b8];
+
+    // 1. Triple Staggered Concentric Shockwave Rings!
+    let ringsSpawned = 0;
+    for (const sw of this.fxShockwaves) {
+      if (sw.active) continue;
       sw.active = true;
-      sw.age = 0;
-      sw.mesh.position.set(x, y, 0.08);
+      sw.age = -ringsSpawned * 0.04; // Staggered concentric pulse!
+      sw.maxLife = 0.36 + ringsSpawned * 0.11;
+      sw.mesh.position.set(x, y, 0.08 + ringsSpawned * 0.02);
       sw.mesh.scale.set(0.2, 0.2, 0.2);
-      (sw.mesh.material as THREE.MeshBasicMaterial).color.setHex(type === PickupType.FUEL ? 0x00f5ff : 0xffbb00);
+      (sw.mesh.material as THREE.MeshBasicMaterial).color.setHex(palette[ringsSpawned % palette.length]);
       sw.mesh.visible = true;
+      ringsSpawned++;
+      if (ringsSpawned >= 3) break;
     }
 
-    // 2. Bursting Spark Particles
-    const count = type === PickupType.FUEL ? 20 : 26;
+    // 2. Vertical Holographic Absorption Beam Pillar!
+    const pil = this.fxPillars.find(p => !p.active);
+    if (pil) {
+      pil.active = true;
+      pil.age = 0;
+      pil.maxLife = 0.42;
+      pil.mesh.position.set(x, y - 0.35, 0.06);
+      pil.mesh.scale.set(1.2, 0.5, 1.2);
+      (pil.mesh.material as THREE.MeshBasicMaterial).color.setHex(palette[0]);
+      pil.mesh.visible = true;
+    }
+
+    // 3. 36 High-Energy Spiraling 1979 Starburst Sparks!
+    const count = 36;
     let spawned = 0;
     for (const p of this.fxParticles) {
       if (p.active) continue;
       p.active = true;
       p.age = 0;
-      p.maxLife = 0.38 + Math.random() * 0.25;
-      p.baseScale = 0.9 + Math.random() * 0.5;
-      p.mesh.position.set(x + (Math.random() - 0.5) * 0.15, y + (Math.random() - 0.5) * 0.15, 0.08);
+      p.maxLife = 0.44 + Math.random() * 0.32;
+      p.baseScale = 1.05 + Math.random() * 0.75;
+      p.mesh.position.set(x + (Math.random() - 0.5) * 0.18, y + (Math.random() - 0.5) * 0.18, 0.10);
 
-      const angle = (spawned / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
-      const speed = 2.8 + Math.random() * 4.2;
+      const angle = (spawned / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.28;
+      const isOuterBurst = spawned % 2 === 0;
+      const speed = isOuterBurst ? (4.8 + Math.random() * 4.5) : (2.2 + Math.random() * 2.8);
       p.velocity.set(
         Math.cos(angle) * speed,
-        Math.sin(angle) * speed + (type === PickupType.FUEL ? 2.6 : 1.2),
-        0
+        Math.sin(angle) * speed + (isOuterBurst ? 2.8 : 1.6),
+        (Math.random() - 0.5) * 1.4
       );
 
       (p.mesh.material as THREE.MeshBasicMaterial).color.setHex(
-        type === PickupType.FUEL
-          ? (spawned % 2 === 0 ? 0x00f5ff : 0x39ff14)
-          : (spawned % 2 === 0 ? 0xffea00 : 0xff8800)
+        spawned % 4 === 3 ? 0xffffff : palette[spawned % palette.length]
       );
       p.mesh.scale.set(p.baseScale, p.baseScale, p.baseScale);
       p.mesh.visible = true;

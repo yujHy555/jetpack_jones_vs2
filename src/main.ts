@@ -6,11 +6,16 @@ import { Player } from './entities/Player';
 import { ObstacleManager, ObstacleType, PickupType } from './level/Obstacles';
 import { ParallaxLayers } from './level/ParallaxLayers';
 import { LevelGenerator } from './level/LevelGenerator';
+import { PixelPortalManager } from './level/PixelPortalManager';
 import { HUD } from './ui/HUD';
 import { MeteorManager, MeteorType } from './entities/MeteorManager';
+import { EnemyBlob } from './entities/EnemyBlob';
+import { HangarCustomizer } from './ui/HangarCustomizer';
+import { JetpackModelId } from './entities/MixamoCharacterRig';
 
 enum GameState {
   START,
+  CUSTOMIZE,
   PLAYING,
   GAMEOVER
 }
@@ -23,6 +28,10 @@ class Game {
   private obstacleManager: ObstacleManager;
   private parallaxLayers: ParallaxLayers;
   private levelGenerator: LevelGenerator;
+  private pixelPortalManager: PixelPortalManager;
+  private hangarCustomizer: HangarCustomizer;
+  private hangarPixelStyle: boolean = true;
+  private hangarJetpackBtnHeld: boolean = false;
   private hud: HUD;
   private meteorManager: MeteorManager;
 
@@ -36,9 +45,33 @@ class Game {
   private touchSize: 'compact' | 'normal' | 'large' = 'normal';
   private touchOpacity: number = 85;
 
-  // Lock-on Target Tracking System
+  // Lock-on Target Tracking & Next-Gen Raycast Laser Sight Beam
   private lockedEnemy: any = null;
   private lockOnMesh!: THREE.Group;
+  private rayBeamGroup!: THREE.Group;
+  private rayBeamCore!: THREE.Mesh;
+  private rayBeamSheath!: THREE.Mesh;
+  private rayBeamSheathMat!: THREE.ShaderMaterial;
+  private rayImpactDot!: THREE.Mesh;
+  private rayBeamFlashTimer: number = 0;
+  private readonly _beamStart = new THREE.Vector3();
+  private readonly _beamEnd = new THREE.Vector3();
+  private readonly _beamDir = new THREE.Vector3();
+  private readonly _beamUp = new THREE.Vector3(0, 1, 0);
+
+  // Always-Visible FPS Counter Telemetry
+  private fpsValueEl: HTMLElement | null = null;
+  private fpsMsEl: HTMLElement | null = null;
+  private fpsDotEl: HTMLElement | null = null;
+  private fpsBoxEl: HTMLElement | null = null;
+  private fpsFrames: number = 0;
+  private fpsAccumMs: number = 0;
+  private lastRafTime: number = 0;
+
+  // Startup Shoot Lockout & Cinematic Death Polish (Hit-Stop + Slow-Mo)
+  private startShootLockout: number = 0;
+  private hitStopTimer: number = 0;
+  private deathSlowMoTimer: number = 0;
 
   constructor() {
     this.sceneManager = new SceneManager();
@@ -47,14 +80,37 @@ class Game {
     this.hud = new HUD();
     this.clock = new THREE.Clock();
 
+    this.fpsValueEl = document.getElementById('fps-value');
+    this.fpsMsEl = document.getElementById('fps-ms');
+    this.fpsDotEl = document.getElementById('fps-dot');
+    this.fpsBoxEl = document.getElementById('fps-counter');
+
     this.player = new Player(this.sceneManager.scene);
-    this.player.onFootstep = () => this.audioManager.playFootstep();
+    this.player.onFootstep = (mode) => this.audioManager.playFootstep(mode);
+    this.player.onJump = (isDouble) => this.audioManager.playJump(isDouble);
+    this.player.onSlide = () => this.audioManager.playSlide();
+    this.player.onLand = (impact) => this.audioManager.playGroundLanding(impact);
+    this.player.onDeath = () => this.onPlayerFatalImpact();
     this.player.onShieldDeflect = () => this.audioManager.playShieldDeflect();
     this.player.onRadioTransmit = () => this.audioManager.playRadioWavePing();
     this.player.onBallBounce = (s) => this.audioManager.playBallBounce(s);
     this.obstacleManager = new ObstacleManager(this.sceneManager.scene);
     this.parallaxLayers = new ParallaxLayers(this.sceneManager.scene);
     this.levelGenerator = new LevelGenerator(this.obstacleManager, this.sceneManager.scene);
+    this.pixelPortalManager = new PixelPortalManager(this.sceneManager.scene);
+    this.pixelPortalManager.onPixelModeChange = (enabled) => {
+      this.sceneManager.setPixelArtMode(enabled, true);
+      this.player.setPixelMode(enabled);
+      this.audioManager.playPortalWarp(enabled);
+      this.showUpgradeBanner(
+        enabled
+          ? '👾 PIXEL DIMENSION — ADVANCED 16-BIT PIXEL SHADER ACTIVE!'
+          : '✨ HD REALITY — FULL 3D SHADER RESTORED!'
+      );
+    };
+    this.hangarCustomizer = new HangarCustomizer(this.sceneManager.scene, this.sceneManager.renderer);
+    this.hangarCustomizer.onLand = (impact) => this.audioManager.playGroundLanding(impact);
+    this.hangarCustomizer.onCrtStatic = (dur) => this.audioManager.playCrtStaticNoise(dur);
     this.meteorManager = new MeteorManager(this.sceneManager.scene);
     this.meteorManager.onSedimentWarning = () => {
       this.audioManager.playRadioCrackleSedimentWarning();
@@ -66,11 +122,89 @@ class Game {
     this.setupMainMenu();
     this.setupSettingsModal();
     this.setupControlsModal();
+    this.setupControlsZoomPopup();
+    this.setupHangarUI();
     this.showMainMenu();
 
     (window as any).__JETPACK_GAME__ = this;
 
+    // Preload ALL 3D assets, animations, revolver & compile ALL WebGL shaders BEFORE starting the loop!
+    this.bootAndPreload();
+  }
+
+  private async bootAndPreload() {
+    const barEl = document.getElementById('boot-progress-bar');
+    const statusEl = document.getElementById('boot-status-text');
+    const preloaderEl = document.getElementById('boot-preloader');
+
+    const setProgress = (pct: number, label: string) => {
+      if (barEl) barEl.style.width = `${Math.max(4, Math.min(100, pct))}%`;
+      if (statusEl) statusEl.textContent = `${label} ${Math.round(pct)}%`;
+    };
+
+    setProgress(8, 'LOADING 1979 FLIGHT SYSTEMS...');
+    try {
+      await Promise.all([
+        this.player.whenReady((pct, label) => setProgress(pct, label)),
+        this.sceneManager.whenLevelHDRIReady(),
+        this.hangarCustomizer.whenHDRIReady()
+      ]);
+    } catch (e) {
+      console.warn('[Boot] Asset preload warning:', e);
+    }
+
+    setProgress(92, 'COMPILING GPU & PIXEL-ART SHADERS...');
+    // Yield one frame so the progress bar paints at 92% before synchronous GPU shader compilation
+    await new Promise((r) => requestAnimationFrame(r));
+    EnemyBlob.warmup(this.sceneManager.scene, this.sceneManager.renderer, this.sceneManager.camera);
+    this.sceneManager.warmupShaders();
+
+    setProgress(100, 'SYSTEMS ONLINE — READY FOR LAUNCH');
+    await new Promise((r) => setTimeout(r, 120));
+
+    if (preloaderEl) {
+      preloaderEl.style.opacity = '0';
+      preloaderEl.style.pointerEvents = 'none';
+      setTimeout(() => preloaderEl.remove(), 380);
+    }
+
+    // Reset clock cleanly so frame 1 has zero dt jump!
+    this.clock.getDelta();
+    this.lastRafTime = performance.now();
     requestAnimationFrame((t) => this.loop(t));
+  }
+
+  private onPlayerFatalImpact() {
+    this.hitStopTimer = 0.075;
+    this.deathSlowMoTimer = 0.72;
+    this.sceneManager.cameraZoomOffset = -3.4;
+    this.sceneManager.triggerShake(0.68, 0.45);
+    this.audioManager.setJetpackThrust(false);
+    this.audioManager.playHitImpact();
+    this.triggerDeathImpactFlash();
+  }
+
+  private triggerDeathImpactFlash() {
+    let flash = document.getElementById('death-impact-flash');
+    if (!flash) {
+      flash = document.createElement('div');
+      flash.id = 'death-impact-flash';
+      flash.style.cssText = `
+        position: fixed;
+        inset: 0;
+        z-index: 4500;
+        pointer-events: none;
+        background: radial-gradient(circle at center, rgba(255, 127, 42, 0.14) 28%, rgba(255, 42, 109, 0.62) 100%);
+        opacity: 0;
+        transition: opacity 0.42s ease-out;
+      `;
+      document.body.appendChild(flash);
+    }
+    flash.style.transition = 'none';
+    flash.style.opacity = '1';
+    void flash.offsetWidth;
+    flash.style.transition = 'opacity 0.52s ease-out';
+    flash.style.opacity = '0';
   }
 
   private setupUIEvents() {
@@ -159,6 +293,8 @@ class Game {
 
   public showMainMenu() {
     this.state = GameState.START;
+    this.inputManager.gameplayInputEnabled = false;
+    this.sceneManager.cameraZoomOffset = 0;
     const menuEl = document.getElementById('main-menu-overlay');
     if (menuEl) menuEl.classList.remove('hidden');
     const hudEl = document.getElementById('hud');
@@ -185,7 +321,7 @@ class Game {
     const touchEl = document.getElementById('touch-controls');
     if (touchEl) touchEl.style.display = '';
     const reticleEl = document.getElementById('reticle');
-    if (reticleEl) reticleEl.style.display = '';
+    if (reticleEl) reticleEl.style.display = 'none';
   }
 
   public returnToMainMenu() {
@@ -200,7 +336,7 @@ class Game {
     if (btnPlay) {
       const startHandler = (e: Event) => {
         e.preventDefault();
-        this.audioManager.playLaser();
+        e.stopPropagation();
         this.startGame();
       };
       btnPlay.addEventListener('click', startHandler);
@@ -231,6 +367,164 @@ class Game {
           window.location.reload();
         }
       });
+    }
+  }
+
+  private setupControlsZoomPopup() {
+    const modal = document.getElementById('controls-zoom-modal');
+    const zoomImg = document.getElementById('controls-zoom-img') as HTMLImageElement | null;
+    const closeBtn = document.getElementById('btn-close-controls-zoom');
+    const kbThumb = document.getElementById('thumb-controls-keyboard') as HTMLImageElement | null;
+    const gpThumb = document.getElementById('thumb-controls-gamepad') as HTMLImageElement | null;
+    if (!modal || !zoomImg) return;
+
+    const openZoom = (src: string, alt: string) => {
+      zoomImg.src = src;
+      zoomImg.alt = alt;
+      modal.classList.add('open');
+      modal.setAttribute('aria-hidden', 'false');
+    };
+
+    const closeZoom = () => {
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
+    };
+
+    if (kbThumb) {
+      kbThumb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openZoom(kbThumb.src, 'Keyboard Controls Diagram');
+      });
+    }
+    if (gpThumb) {
+      gpThumb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openZoom(gpThumb.src, 'Gamepad Controls Diagram');
+      });
+    }
+    if (closeBtn) {
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeZoom();
+      });
+    }
+    // Clicking the dark backdrop outside the card also closes cleanly
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeZoom();
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape' && modal.classList.contains('open')) {
+        closeZoom();
+      }
+    });
+  }
+
+  private setupHangarUI() {
+    const btnMenuHangar = document.getElementById('menu-btn-hangar');
+    const btnHudHangar = document.getElementById('btn-hangar');
+    const btnBack = document.getElementById('btn-hangar-back');
+    const btnLaunch = document.getElementById('btn-hangar-launch');
+    const btnMk79 = document.getElementById('btn-jp-mk79');
+    const btnEcon = document.getElementById('btn-jp-economist');
+    const btnPixelToggle = document.getElementById('btn-hangar-pixel-toggle');
+    const btnJetpackTest = document.getElementById('btn-hangar-jetpack-test');
+
+    const startTest = (e: Event) => {
+      e.preventDefault();
+      this.hangarJetpackBtnHeld = true;
+    };
+    const endTest = () => {
+      this.hangarJetpackBtnHeld = false;
+    };
+    if (btnJetpackTest) {
+      btnJetpackTest.addEventListener('pointerdown', startTest);
+      btnJetpackTest.addEventListener('pointerup', endTest);
+      btnJetpackTest.addEventListener('pointerleave', endTest);
+      btnJetpackTest.addEventListener('pointercancel', endTest);
+    }
+
+    const selectJetpack = (model: JetpackModelId) => {
+      this.player.setJetpackModel(model);
+      btnMk79?.classList.toggle('selected', model === 'mk79');
+      btnEcon?.classList.toggle('selected', model === 'economist');
+    };
+
+    btnMenuHangar?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openHangar();
+    });
+    btnHudHangar?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openHangar();
+    });
+    btnMk79?.addEventListener('click', () => selectJetpack('mk79'));
+    btnEcon?.addEventListener('click', () => selectJetpack('economist'));
+    btnPixelToggle?.addEventListener('click', () => {
+      this.hangarPixelStyle = !this.hangarPixelStyle;
+      this.sceneManager.setPixelArtMode(this.hangarPixelStyle, false);
+      this.player.setPixelMode(this.hangarPixelStyle);
+      if (btnPixelToggle) {
+        btnPixelToggle.textContent = this.hangarPixelStyle
+          ? '👾 HDRI STYLE: 16-BIT PIXEL ART'
+          : '✨ HDRI STYLE: FULL HD HDRI';
+      }
+    });
+    btnBack?.addEventListener('click', () => this.closeHangar(false));
+    btnLaunch?.addEventListener('click', () => this.closeHangar(true));
+  }
+
+  public openHangar() {
+    this.state = GameState.CUSTOMIZE;
+    this.inputManager.gameplayInputEnabled = false;
+    this.audioManager.setJetpackThrust(false);
+
+    // Hide main menu, gameplay HUD & level geometry so the Hangar + HDRI + Rotating Disc shine cleanly!
+    document.getElementById('main-menu-overlay')?.classList.add('hidden');
+    const hudEl = document.getElementById('hud');
+    if (hudEl) hudEl.style.display = 'none';
+    const topCtrl = document.querySelector('.top-controls') as HTMLElement | null;
+    if (topCtrl) topCtrl.style.display = 'none';
+    const touchEl = document.getElementById('touch-controls');
+    if (touchEl) touchEl.style.display = 'none';
+    document.getElementById('hangar-overlay')?.classList.remove('hidden');
+
+    this.parallaxLayers.group.visible = false;
+    this.pixelPortalManager.setVisible(false);
+    this.obstacleManager.setAllVisible(false);
+
+    this.player.reset(0, -3.70);
+    this.player.mesh.position.set(0, -3.70, 0);
+    this.hangarCustomizer.enter(
+      this.sceneManager.camera,
+      this.sceneManager.keyLight,
+      this.sceneManager.ambientLight
+    );
+    // Apply 16-bit Pixel-Art Shader cleanly with NO depth of field (crisp edge-to-edge!)
+    this.sceneManager.setPixelArtMode(this.hangarPixelStyle, false);
+    this.sceneManager.setDepthOfField(false);
+    this.player.setPixelMode(this.hangarPixelStyle);
+  }
+
+  public closeHangar(launchGame: boolean) {
+    this.hangarJetpackBtnHeld = false;
+    this.audioManager.setJetpackThrust(false);
+    document.getElementById('hangar-overlay')?.classList.add('hidden');
+    this.hangarCustomizer.exit(this.sceneManager.keyLight, this.sceneManager.ambientLight);
+    this.player.mesh.rotation.y = 0;
+
+    this.parallaxLayers.group.visible = true;
+    this.pixelPortalManager.setVisible(true);
+    this.obstacleManager.setAllVisible(true);
+    this.sceneManager.setPixelArtMode(false, false);
+    this.sceneManager.setDepthOfField(false);
+    this.player.setPixelMode(false);
+
+    if (launchGame) {
+      this.startGame();
+    } else {
+      this.showMainMenu();
     }
   }
 
@@ -548,9 +842,20 @@ class Game {
     this.hideMainMenu();
     this.state = GameState.PLAYING;
     this.score = 0;
+    this.hitStopTimer = 0;
+    this.deathSlowMoTimer = 0;
+    this.startShootLockout = 0.35; // Guarantees zero accidental shot on start/load!
+    this.sceneManager.cameraZoomOffset = 0;
     this.player.reset(0, -3.70); // Start in idle on solid ground
     this.levelGenerator.reset(0);
+    this.pixelPortalManager.reset(0);
+    this.sceneManager.setPixelArtMode(false, false);
+    this.player.setPixelMode(false);
     this.meteorManager.reset();
+    // Flush any buffered menu click / button press so Jones never shoots or jumps on load!
+    this.inputManager.gameplayInputEnabled = true;
+    this.inputManager.consumeShootTrigger();
+    this.inputManager.consumeJumpTrigger();
   }
 
   private updateForcefieldUI() {
@@ -596,6 +901,8 @@ class Game {
 
   private onGameOver() {
     this.state = GameState.GAMEOVER;
+    this.inputManager.gameplayInputEnabled = false;
+    this.sceneManager.cameraZoomOffset = 0;
     this.audioManager.setJetpackThrust(false);
     this.audioManager.playExplosion();
     this.sceneManager.triggerShake(0.5, 0.4);
@@ -609,7 +916,49 @@ class Game {
   private loop(currentTime: number) {
     requestAnimationFrame((t) => this.loop(t));
 
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+    // Always-visible 1979 FPS Telemetry Counter (updates every 250ms, zero layout thrash)
+    const frameMs = this.lastRafTime > 0 ? (currentTime - this.lastRafTime) : 16.67;
+    this.lastRafTime = currentTime;
+    this.fpsFrames++;
+    this.fpsAccumMs += frameMs;
+    if (this.fpsAccumMs >= 250) {
+      const avgMs = this.fpsAccumMs / Math.max(1, this.fpsFrames);
+      const fps = Math.round(1000 / Math.max(1, avgMs));
+      if (this.fpsValueEl) this.fpsValueEl.textContent = `${fps} FPS`;
+      if (this.fpsMsEl) this.fpsMsEl.textContent = `${avgMs.toFixed(1)}ms`;
+      const color = fps >= 50 ? '#a6ff38' : (fps >= 30 ? '#ff9e44' : '#ff4d88');
+      if (this.fpsBoxEl) {
+        this.fpsBoxEl.style.color = color;
+        this.fpsBoxEl.style.borderColor = color;
+      }
+      if (this.fpsDotEl) {
+        this.fpsDotEl.style.background = color;
+        this.fpsDotEl.style.boxShadow = `0 0 8px ${color}`;
+      }
+      this.fpsFrames = 0;
+      this.fpsAccumMs = 0;
+    }
+
+    const rawDt = Math.min(this.clock.getDelta(), 0.05);
+
+    // Hit-stop freeze frame on fatal death impact (extra punchy AAA feel!)
+    if (this.hitStopTimer > 0) {
+      this.hitStopTimer = Math.max(0, this.hitStopTimer - rawDt);
+      this.sceneManager.render();
+      return;
+    }
+
+    // Smooth dramatic slow-mo time dilation during the opening of Jones's death animation!
+    let timeScale = 1.0;
+    if (this.deathSlowMoTimer > 0) {
+      this.deathSlowMoTimer = Math.max(0, this.deathSlowMoTimer - rawDt);
+      const t = this.deathSlowMoTimer / 0.72;
+      timeScale = THREE.MathUtils.lerp(1.0, 0.36, Math.min(1, t * 1.4));
+    } else if (!this.player.isDying) {
+      this.sceneManager.cameraZoomOffset = THREE.MathUtils.lerp(this.sceneManager.cameraZoomOffset, 0, Math.min(1, rawDt * 5.0));
+    }
+
+    const dt = rawDt * timeScale;
     const totalTime = this.clock.getElapsedTime();
 
     this.inputManager.update();
@@ -622,14 +971,17 @@ class Game {
     this.updateLockOnSystem(dt, totalTime);
 
     if (this.state === GameState.PLAYING) {
-      // 1. Process 360° Shoot Trigger
-      if (this.inputManager.consumeShootTrigger()) {
+      // Post-start shoot lockout guarantees player NEVER shoots automatically on load/start
+      if (this.startShootLockout > 0) {
+        this.startShootLockout = Math.max(0, this.startShootLockout - rawDt);
+        this.inputManager.consumeShootTrigger();
+      } else if (this.inputManager.consumeShootTrigger()) {
+        // 1. Pure Raycast Auto-Lock Shoot Trigger (Works identically on Mouse, Keyboard & Gamepad!)
         const fired = this.player.shoot(
-          this.autoAimEnabled && this.lockedEnemy
-            ? this.inputManager.mouseWorldTarget
-            : (this.inputManager.hasMouse ? this.inputManager.mouseWorldTarget : undefined)
+          this.lockedEnemy ? this.inputManager.mouseWorldTarget : undefined
         );
         if (fired) {
+          this.rayBeamFlashTimer = 0.26;
           this.audioManager.playLaser();
           this.sceneManager.triggerShake(0.08, 0.08); // Satisfying gun recoil shake
         }
@@ -647,9 +999,10 @@ class Game {
         this.toggleForcefield();
       }
 
-      // 2. Audio Jetpack Thruster Sound
+      // 2. Audio Jetpack Thruster Sound (shifts to warm hover stabilizer hum during the 1s hang!)
       const isJetpacking = this.inputManager.jetpack && this.player.fuel > 0;
-      this.audioManager.setJetpackThrust(isJetpacking);
+      const isHovering = !isJetpacking && this.player.isHoverHanging;
+      this.audioManager.setJetpackThrust(isJetpacking || isHovering, isHovering);
 
       if (this.player.fuel < 18 && this.player.fuel > 0 && Math.sin(totalTime * 8) > 0.8) {
         this.audioManager.playWarning();
@@ -667,6 +1020,21 @@ class Game {
           d => d.active && Math.hypot(d.position.x - this.player.position.x, d.position.y - this.player.position.y) < 10.0
         );
 
+      // Hide floating mouse cursor reticle (Pure Raycast Auto-Lock system!)
+      document.getElementById('reticle')?.classList.remove('active');
+
+      // Wire ultra-subtle console haptic tap ONLY during active gameplay (strictly silent at Menu/GameOver!)
+      if (!this.player.onHaptic) {
+        this.player.onHaptic = (ms, w, s) => {
+          if (this.state === GameState.PLAYING) {
+            this.inputManager.triggerRumble(ms, w, s);
+          }
+        };
+      }
+
+      // Pass locked raycast target for real-time arm aim tracking whenever Jones is shooting/drawn!
+      const hasLockedTarget = Boolean(this.lockedEnemy);
+
       this.player.update(
         dt,
         this.inputManager.moveX,
@@ -675,9 +1043,13 @@ class Game {
         this.inputManager.jetpack,
         platforms,
         this.inputManager.mouseWorldTarget,
-        this.inputManager.hasMouse,
+        hasLockedTarget,
         this.inputManager.crouch,
-        underPressure
+        underPressure,
+        this.inputManager.jumpHeld,
+        this.inputManager.jetpackThrottle,
+        this.inputManager.jetpackDirectTrigger,
+        false
       );
 
       // Update Falling Meteor & Shatter Shrapnel System
@@ -688,10 +1060,24 @@ class Game {
         (type) => this.audioManager.playMeteorShatter(type === MeteorType.CRYSTAL)
       );
 
-      // 4. Update Level & Obstacles & Alien Enemies
+      // 4. Update Level, Pixel Portals (guaranteed unobstructed by ALL platforms, obstacles & crates!), Obstacles & Enemies
       this.levelGenerator.update(this.player.position.x);
+      const doorBlockers: { x: number; y: number; halfW: number; halfH: number }[] = [];
+      for (const obs of this.obstacleManager.obstacles) {
+        if (!obs.active) continue;
+        const hw = obs.collider.halfSize ? obs.collider.halfSize.x : (obs.collider.radius ?? 0.8);
+        const hh = obs.collider.halfSize ? obs.collider.halfSize.y : (obs.collider.radius ?? 0.8);
+        doorBlockers.push({ x: obs.group.position.x, y: obs.group.position.y, halfW: hw, halfH: hh });
+      }
+      for (const cr of this.obstacleManager.crates) {
+        if (!cr.active || cr.isDestroyed) continue;
+        doorBlockers.push({ x: cr.position.x, y: cr.position.y, halfW: cr.halfW, halfH: cr.halfH });
+      }
+      this.pixelPortalManager.ensureClearOfPlatforms(platforms, doorBlockers);
+      this.pixelPortalManager.update(dt, totalTime, this.player.position.x, this.player.position.y);
       this.obstacleManager.update(dt, totalTime, this.player.position.x, this.player.position.y);
       this.parallaxLayers.update(this.player.position.x, this.player.position.y, totalTime);
+      this.hangarCustomizer.update(dt, totalTime, this.player.position.x);
 
       // 5. Collision Checks
       this.checkCollisions(dt);
@@ -708,10 +1094,21 @@ class Game {
       if (this.player.isDead) {
         this.onGameOver();
       }
+    } else if (this.state === GameState.CUSTOMIZE) {
+      // Triple-AAA Hangar Showcase: Rotating Disc + Controlled Jetpack Hover Test + 1m x 1m Blue Laser Grid + Right-Stick 360° Orbit!
+      const isHovering = this.inputManager.jetpack || this.hangarJetpackBtnHeld;
+      this.audioManager.setJetpackThrust(isHovering, isHovering);
+      const rsX = this.inputManager.hasGamepadAim ? this.inputManager.rightStickAimX : 0;
+      const rsY = this.inputManager.hasGamepadAim ? this.inputManager.rightStickAimY : 0;
+      this.hangarCustomizer.update(dt, totalTime, 0, this.player.mesh, this.sceneManager.camera, isHovering, rsX, rsY);
+      this.player.updateHangarShowcase(dt, isHovering, this.hangarCustomizer.hoverHeight);
+      this.sceneManager.render();
+      return;
     } else {
       // Idle scene animation on start screen
       this.parallaxLayers.update(0, -3.70, totalTime);
       this.obstacleManager.update(dt, totalTime, 0, 0);
+      this.hangarCustomizer.update(dt, totalTime, 0);
       const platforms = this.obstacleManager.getPlatforms();
       this.player.update(
         dt,
@@ -1363,97 +1760,266 @@ class Game {
       bV.position.set(bx, by, 0);
       this.lockOnMesh.add(bV);
     }
+
+    // Next-Gen Triple-AAA Holographic Raycast Targeting Laser Beam (Colt Barrel -> Locked Target)
+    this.rayBeamGroup = new THREE.Group();
+    this.rayBeamGroup.visible = false;
+    this.sceneManager.scene.add(this.rayBeamGroup);
+
+    // 1. Razor-sharp incandescent white-cyan inner core
+    const coreGeo = new THREE.CylinderGeometry(0.011, 0.011, 1.0, 8, 1, true);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xe8ffff,
+      transparent: true,
+      opacity: 0.92,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    this.rayBeamCore = new THREE.Mesh(coreGeo, coreMat);
+    this.rayBeamCore.renderOrder = 10;
+    this.rayBeamGroup.add(this.rayBeamCore);
+
+    // 2. Animated GLSL Holographic Outer Energy Sheath with flowing digital telemetry pulses
+    const sheathGeo = new THREE.CylinderGeometry(0.045, 0.045, 1.0, 12, 1, true);
+    this.rayBeamSheathMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uLength: { value: 5.0 },
+        uFlash: { value: 0 }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        uniform float uTime;
+        uniform float uLength;
+        uniform float uFlash;
+        void main() {
+          // Flowing high-speed energy pulses racing from Colt barrel (vUv.y = 0) -> locked target (vUv.y = 1)
+          float flow1 = sin((vUv.y * uLength * 3.8) - uTime * 22.0) * 0.5 + 0.5;
+          float flow2 = sin((vUv.y * uLength * 9.0) - uTime * 38.0) * 0.5 + 0.5;
+          float pulse = 0.45 + 0.40 * pow(flow1, 2.0) + 0.25 * pow(flow2, 3.0);
+
+          // Crisp radial & endpoint feathering
+          float edgeFade = smoothstep(0.0, 0.06, vUv.y) * smoothstep(1.0, 0.94, vUv.y);
+
+          // Electric Cyan tracking -> Blazing Gold-Crimson overdrive flash when firing!
+          vec3 trackCol = vec3(0.04, 0.92, 1.0);
+          vec3 fireCol  = vec3(1.0, 0.48, 0.16);
+          vec3 col = mix(trackCol, fireCol, uFlash);
+
+          float alpha = (0.38 + 0.48 * uFlash) * pulse * edgeFade;
+          gl_FragColor = vec4(col * (1.25 + 0.9 * uFlash), alpha);
+        }
+      `
+    });
+    this.rayBeamSheath = new THREE.Mesh(sheathGeo, this.rayBeamSheathMat);
+    this.rayBeamSheath.renderOrder = 9;
+    this.rayBeamGroup.add(this.rayBeamSheath);
+
+    // 3. Glowing Target Impact Laser Contact Dot
+    const dotGeo = new THREE.SphereGeometry(0.11, 12, 12);
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: 0x66ffff,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    this.rayImpactDot = new THREE.Mesh(dotGeo, dotMat);
+    this.rayImpactDot.renderOrder = 11;
+    this.rayBeamGroup.add(this.rayImpactDot);
   }
 
   /**
-   * Smart Lock-On Targeting Detection & Position Snapping
+   * 2D Slab Raycast Segment-vs-AABB Line-of-Sight check against solid platforms/cover
+   */
+  private hasClearRaycastLineOfSight(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    platforms: { x: number; y: number; width: number; height: number }[]
+  ): boolean {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    for (const p of platforms) {
+      const minX = p.x - p.width * 0.5;
+      const maxX = p.x + p.width * 0.5;
+      const minY = p.y - p.height * 0.5;
+      const maxY = p.y + p.height * 0.5;
+
+      let tMin = 0.02;
+      let tMax = 0.98;
+
+      if (Math.abs(dx) < 1e-6) {
+        if (x0 < minX || x0 > maxX) continue;
+      } else {
+        let tx1 = (minX - x0) / dx;
+        let tx2 = (maxX - x0) / dx;
+        if (tx1 > tx2) { const tmp = tx1; tx1 = tx2; tx2 = tmp; }
+        tMin = Math.max(tMin, tx1);
+        tMax = Math.min(tMax, tx2);
+        if (tMin > tMax) continue;
+      }
+
+      if (Math.abs(dy) < 1e-6) {
+        if (y0 < minY || y0 > maxY) continue;
+      } else {
+        let ty1 = (minY - y0) / dy;
+        let ty2 = (maxY - y0) / dy;
+        if (ty1 > ty2) { const tmp = ty1; ty1 = ty2; ty2 = tmp; }
+        tMin = Math.max(tMin, ty1);
+        tMax = Math.min(tMax, ty2);
+        if (tMin > tMax) continue;
+      }
+
+      // Ray hits solid platform between Jones and the target -> blocked!
+      if (tMin <= tMax) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Pure Raycast Auto-Lock Targeting System:
+   * Casts clear line-of-sight rays from Jones's shoulder to all active enemies/targets,
+   * automatically locks onto the closest visible enemy, and aims Jones's Colt arm directly at it!
    */
   private updateLockOnSystem(dt: number, totalTime: number) {
-    if (!this.autoAimEnabled || this.state !== GameState.PLAYING) {
+    if (this.state !== GameState.PLAYING || this.player.isDying) {
       if (this.lockOnMesh) this.lockOnMesh.visible = false;
+      if (this.rayBeamGroup) this.rayBeamGroup.visible = false;
       this.lockedEnemy = null;
       document.getElementById('reticle')?.classList.remove('locked');
       return;
     }
 
-    let searchCenter: THREE.Vector3;
-    let closestDist: number;
+    const originX = this.player.position.x;
+    const originY = this.player.position.y + 1.48;
+    const lookDir = this.player.facingRight ? 1 : -1;
+    const platforms = this.obstacleManager.getPlatforms();
 
-    if (this.inputManager.hasMouse) {
-      searchCenter = this.inputManager.mouseWorldTarget;
-      closestDist = 2.8; // Lock-on acquisition radius for mouse reticle
-    } else {
-      // Smart Auto-Aim for Touch / Mobile: scan ahead in player's facing direction
-      const lookDir = this.player.facingRight ? 1 : -1;
-      searchCenter = new THREE.Vector3(this.player.position.x + lookDir * 4.5, this.player.position.y + 0.5, 0);
-      closestDist = 8.5; // Wide assist field for mobile
-    }
+    const maxForwardRange = 21.0;
+    const maxBehindRange = 7.5; // Still detects close drones diving behind Jones!
 
     let closestEnemy: any = null;
+    let bestScore = Infinity;
+    let bestPosX = 0;
+    let bestPosY = 0;
 
-    for (const enemy of this.obstacleManager.enemies) {
-      if (!enemy.active) continue;
-      const targetPos = new THREE.Vector3(enemy.position.x, enemy.position.y + 0.45, 0);
-      const d = searchCenter.distanceTo(targetPos);
-      if (d < closestDist) {
-        closestDist = d;
-        closestEnemy = enemy;
-      }
-    }
+    const evaluateCandidate = (cand: any, tx: number, ty: number, priorityBias: number = 0) => {
+      const dx = tx - originX;
+      const dy = ty - originY;
+      const dist = Math.hypot(dx, dy);
+      const inFront = dx * lookDir >= -0.6;
+      const maxRange = inFront ? maxForwardRange : maxBehindRange;
+      if (dist > maxRange || dist < 0.35) return;
+
+      // Prefer targets in front of Jones, sorted by closest Euclidean distance
+      const score = dist + (inFront ? 0 : 4.5) + priorityBias;
+      if (score >= bestScore) return;
+
+      // True Raycast Line-of-Sight check against all solid platforms & barriers!
+      if (!this.hasClearRaycastLineOfSight(originX, originY, tx, ty, platforms)) return;
+
+      bestScore = score;
+      closestEnemy = cand;
+      bestPosX = tx;
+      bestPosY = ty;
+    };
 
     for (const drone of this.obstacleManager.drones) {
       if (!drone.active) continue;
-      const targetPos = new THREE.Vector3(drone.position.x, drone.position.y, 0);
-      const d = searchCenter.distanceTo(targetPos);
-      if (d < closestDist) {
-        closestDist = d;
-        closestEnemy = drone;
-      }
+      evaluateCandidate(drone, drone.position.x, drone.position.y, -0.5);
+    }
+
+    for (const enemy of this.obstacleManager.enemies) {
+      if (!enemy.active) continue;
+      evaluateCandidate(enemy, enemy.position.x, enemy.position.y + 0.45, 0);
+    }
+
+    for (const obs of this.obstacleManager.obstacles) {
+      if (!obs.active || obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL) continue;
+      evaluateCandidate(obs, obs.group.position.x, obs.group.position.y + 0.65, 0);
     }
 
     for (const crate of this.obstacleManager.crates) {
       if (!crate.active || crate.isDestroyed) continue;
-      const targetPos = new THREE.Vector3(crate.position.x, crate.position.y, 0);
-      const d = searchCenter.distanceTo(targetPos);
-      if (d < closestDist) {
-        closestDist = d;
-        closestEnemy = crate;
-      }
+      evaluateCandidate(crate, crate.position.x, crate.position.y, 2.0); // Slight priority behind live enemies
     }
 
-    // Modern Robot Dogs (Alien Cyber Sentinels) Cursor Lock-On
-    for (const obs of this.obstacleManager.obstacles) {
-      if (!obs.active || obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL) continue;
-      const targetPos = new THREE.Vector3(obs.group.position.x, obs.group.position.y + 0.65, 0);
-      const d = searchCenter.distanceTo(targetPos);
-      if (d < closestDist) {
-        closestDist = d;
-        closestEnemy = obs;
-      }
+    if (this.rayBeamFlashTimer > 0) {
+      this.rayBeamFlashTimer = Math.max(0, this.rayBeamFlashTimer - dt);
     }
 
     if (closestEnemy) {
       this.lockedEnemy = closestEnemy;
+      this.inputManager.mouseWorldTarget.set(bestPosX, bestPosY, 0);
 
-      const isBlob = !!closestEnemy.slimeTrail;
-      const isSentinel = closestEnemy.type === ObstacleType.ALIEN_CYBER_SENTINEL;
-      const posX = isSentinel ? closestEnemy.group.position.x : closestEnemy.position.x;
-      const posY = isSentinel ? (closestEnemy.group.position.y + 0.65) : (closestEnemy.position.y + (isBlob ? 0.45 : 0));
-      const enemyCenter = new THREE.Vector3(posX, posY, 0);
-
-      this.inputManager.mouseWorldTarget.copy(enemyCenter);
-
-      this.lockOnMesh.position.set(enemyCenter.x, enemyCenter.y, 0.40);
-      this.lockOnMesh.rotation.z += dt * 2.8;
+      this.lockOnMesh.position.set(bestPosX, bestPosY, 0.40);
+      this.lockOnMesh.rotation.z += dt * 3.2;
 
       this.lockOnMesh.visible = true;
       const pulse = 1.0 + Math.sin(totalTime * 14.0) * 0.12;
       this.lockOnMesh.scale.set(pulse, pulse, 1.0);
 
+      // Show Next-Gen Triple-AAA Raycast Laser Beam ONLY when the player presses Shoot!
+      if (this.rayBeamGroup) {
+        if (this.rayBeamFlashTimer > 0) {
+          this.player.getMuzzleWorldPosition(this._beamStart);
+          this._beamStart.z = 0.08;
+          this._beamEnd.set(bestPosX, bestPosY, 0.08);
+          this._beamDir.subVectors(this._beamEnd, this._beamStart);
+          const len = this._beamDir.length();
+          if (len > 0.2) {
+            this._beamDir.divideScalar(len);
+            const midX = (this._beamStart.x + this._beamEnd.x) * 0.5;
+            const midY = (this._beamStart.y + this._beamEnd.y) * 0.5;
+
+            const flashNorm = this.rayBeamFlashTimer / 0.26;
+            const coreScale = 0.5 + flashNorm * 1.1;
+            this.rayBeamCore.position.set(midX, midY, 0.08);
+            this.rayBeamCore.scale.set(coreScale, len, coreScale);
+            this.rayBeamCore.quaternion.setFromUnitVectors(this._beamUp, this._beamDir);
+            (this.rayBeamCore.material as THREE.MeshBasicMaterial).opacity = flashNorm * 0.95;
+
+            const sheathWidth = 0.6 + flashNorm * 1.3;
+            this.rayBeamSheath.position.set(midX, midY, 0.08);
+            this.rayBeamSheath.scale.set(sheathWidth, len, sheathWidth);
+            this.rayBeamSheath.quaternion.setFromUnitVectors(this._beamUp, this._beamDir);
+
+            this.rayBeamSheathMat.uniforms.uTime.value = totalTime;
+            this.rayBeamSheathMat.uniforms.uLength.value = len;
+            this.rayBeamSheathMat.uniforms.uFlash.value = flashNorm;
+
+            this.rayImpactDot.position.set(bestPosX, bestPosY, 0.14);
+            const dotScale = (0.7 + flashNorm * 1.1);
+            this.rayImpactDot.scale.setScalar(dotScale);
+            (this.rayImpactDot.material as THREE.MeshBasicMaterial).opacity = flashNorm;
+
+            this.rayBeamGroup.visible = true;
+          } else {
+            this.rayBeamGroup.visible = false;
+          }
+        } else {
+          this.rayBeamGroup.visible = false;
+        }
+      }
+
       document.getElementById('reticle')?.classList.add('locked');
     } else {
       this.lockedEnemy = null;
       this.lockOnMesh.visible = false;
+      if (this.rayBeamGroup) this.rayBeamGroup.visible = false;
       document.getElementById('reticle')?.classList.remove('locked');
     }
   }

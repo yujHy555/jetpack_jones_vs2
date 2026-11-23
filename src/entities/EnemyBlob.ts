@@ -59,7 +59,140 @@ export class EnemyBlob {
 
   // Body & Googly Eyes with Pupils
   private bodyMesh: THREE.Mesh;
+  private slimeShaderMat!: THREE.ShaderMaterial;
   private coreMesh: THREE.Mesh;
+
+  // Static Shared Geometries & Materials (Zero GPU buffer allocation & Zero shader recompilation on spawn!)
+  private static sharedBodyGeo: THREE.SphereGeometry | null = null;
+  private static sharedStalkMat: THREE.MeshStandardMaterial | null = null;
+  private static sharedShineMat: THREE.MeshBasicMaterial | null = null;
+  private static sharedDropletGeo: THREE.SphereGeometry | null = null;
+  private static sharedDropletPipGeo: THREE.SphereGeometry | null = null;
+  private static sharedDropletMats: THREE.MeshBasicMaterial[] | null = null;
+
+  private static createSlimeShaderMat(): THREE.ShaderMaterial {
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.FrontSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uSlideSpeed: { value: 1.0 },
+        uJiggle: { value: 0.0 }
+      },
+      vertexShader: `
+        uniform float uTime;
+        uniform float uSlideSpeed;
+        uniform float uJiggle;
+        varying vec3 vNormalW;
+        varying vec3 vViewDir;
+        varying vec3 vLocalPos;
+
+        void main() {
+          vec3 p = position;
+          // Anchor bottom flush on ground (y = 0 stays glued while upper jelly dome wobbles!)
+          float hMask = smoothstep(0.0, 0.28, p.y);
+
+          // Multi-frequency organic 3D jelly wobble + peristaltic ground-slide undulation
+          float w1 = sin(p.y * 6.5 - uTime * 7.2 + p.x * 3.0) * 0.055;
+          float w2 = cos(p.x * 7.0 + uTime * 5.8 - p.z * 4.5) * 0.042;
+          float surge = sin(uTime * 5.0) * 0.05 * uSlideSpeed;
+          float hitWave = sin(p.y * 14.0 - uTime * 34.0) * 0.14 * uJiggle;
+
+          p.x += (w1 + surge + hitWave) * hMask;
+          p.z += (w2 + hitWave * 0.6) * hMask;
+          p.y += (cos(uTime * 5.0 + p.x * 3.5) * 0.038 - surge * 0.4) * hMask;
+
+          // Subtle flared wet suction skirt right at the base
+          float skirt = (1.0 - smoothstep(0.0, 0.22, position.y)) * (0.12 + 0.04 * sin(uTime * 6.0 + p.x * 5.0));
+          p.x *= (1.0 + skirt);
+          p.z *= (1.0 + skirt);
+
+          vLocalPos = p;
+          vec4 worldPos = modelMatrix * vec4(p, 1.0);
+          vNormalW = normalize(mat3(modelMatrix) * normal);
+          vViewDir = normalize(cameraPosition - worldPos.xyz);
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        uniform float uTime;
+        uniform float uJiggle;
+        varying vec3 vNormalW;
+        varying vec3 vViewDir;
+        varying vec3 vLocalPos;
+
+        void main() {
+          vec3 N = normalize(vNormalW);
+          vec3 V = normalize(vViewDir);
+          float ndotv = max(0.0, dot(N, V));
+          float fresnel = pow(1.0 - ndotv, 2.35);
+
+          // 1979 Triple-AAA Acid-Lime & Neon-Chartreuse Subsurface Translucent Gel
+          vec3 deepEmerald = vec3(0.05, 0.46, 0.14);
+          vec3 acidLime    = vec3(0.56, 1.00, 0.16);
+          vec3 rimGlow     = vec3(0.84, 1.00, 0.48);
+
+          // Subsurface backlit core glow + Fresnel wet gelatinous rim
+          float sss = pow(ndotv, 1.4) * 0.62 + 0.38;
+          vec3 col = mix(deepEmerald, acidLime, sss);
+          col = mix(col, rimGlow, fresnel * 0.88);
+
+          // Dual glossy studio specular highlights (wet candy slime sheen!)
+          vec3 L1 = normalize(vec3(0.45, 0.85, 0.65));
+          vec3 H1 = normalize(L1 + V);
+          float spec1 = pow(max(0.0, dot(N, H1)), 48.0) * 1.15;
+          vec3 L2 = normalize(vec3(-0.6, 0.4, 0.5));
+          vec3 H2 = normalize(L2 + V);
+          float spec2 = pow(max(0.0, dot(N, H2)), 20.0) * 0.40;
+          col += vec3(0.95, 1.0, 0.85) * (spec1 + spec2);
+
+          // Hit flash surge
+          col = mix(col, vec3(1.0, 1.0, 0.75), clamp(uJiggle * 0.55, 0.0, 0.65));
+
+          // Translucent jelly center (0.64) thickening cleanly to opaque glossy rim (0.95)
+          float alpha = mix(0.64, 0.95, fresnel);
+          gl_FragColor = vec4(col, alpha);
+        }
+      `
+    });
+    // Guarantee Three.js reuses ONE compiled GLSL program for ALL slime blobs (0.0ms spawn stutter!)
+    mat.customProgramCacheKey = () => 'EnemyBlobSlimeV1';
+    return mat;
+  }
+
+  /**
+   * Pre-compiles the EnemyBlob custom GLSL shader & shared geometries during the boot preloader
+   * so spawning blobs mid-run has ZERO WebGL compilation freeze!
+   */
+  public static warmup(scene: THREE.Scene, renderer: THREE.WebGLRenderer, camera: THREE.Camera) {
+    if (!EnemyBlob.sharedBodyGeo) {
+      EnemyBlob.sharedBodyGeo = new THREE.SphereGeometry(0.54, 24, 18);
+      EnemyBlob.sharedBodyGeo.scale(1.18, 0.92, 1.02);
+      EnemyBlob.sharedBodyGeo.translate(0, 0.42, 0);
+    }
+    const warmMat = EnemyBlob.createSlimeShaderMat();
+    const dummy = new THREE.Mesh(EnemyBlob.sharedBodyGeo, warmMat);
+    dummy.position.set(0, -100, 0);
+    dummy.frustumCulled = false;
+    scene.add(dummy);
+    renderer.compile(scene, camera);
+    scene.remove(dummy);
+    warmMat.dispose();
+  }
+
+  // Ultra-Optimized Single-Draw-Call InstancedMesh Slime Trail (0 per-frame allocations!)
+  private static readonly TRAIL_COUNT = 16;
+  private trailInstanced!: THREE.InstancedMesh;
+  private trailPosX = new Float32Array(EnemyBlob.TRAIL_COUNT);
+  private trailPosY = new Float32Array(EnemyBlob.TRAIL_COUNT);
+  private trailAge = new Float32Array(EnemyBlob.TRAIL_COUNT).fill(99);
+  private trailMax = new Float32Array(EnemyBlob.TRAIL_COUNT).fill(2.4);
+  private trailCursor = 0;
+  private trailSpawnDist = 0;
+  private lastTrailX = 0;
+  private readonly _trailDummy = new THREE.Object3D();
   private eyeCenterGroup: THREE.Group;
   private centerGooglyPupil: THREE.Group;
   private stalkEyeLeft: THREE.Group;
@@ -110,20 +243,38 @@ export class EnemyBlob {
     this.patrolDir = Math.random() < 0.5 ? 1 : -1;
     this.hopTimer = Math.random() * this.hopCooldown;
 
-    // 1. Detailed Multi-Layered Gelatinous Slime Body
-    const bodyGeo = new THREE.SphereGeometry(0.52, 20, 16);
-    bodyGeo.scale(1.15, 0.95, 1.0);
-    bodyGeo.translate(0, 0.44, 0); // Pivot firmly at base
-
-    const slimeMat = new THREE.MeshStandardMaterial({
-      color: 0x22ee15,
-      roughness: 0.18,
-      metalness: 0.12,
-      transparent: true,
-      opacity: 0.90,
-    });
-    this.bodyMesh = new THREE.Mesh(bodyGeo, slimeMat);
+    // 1. Next-Gen 1979 Acid-Lime Translucent GPU-Wobble Slime Body (1 draw call, shared geometry + cached GLSL program!)
+    if (!EnemyBlob.sharedBodyGeo) {
+      EnemyBlob.sharedBodyGeo = new THREE.SphereGeometry(0.54, 24, 18);
+      EnemyBlob.sharedBodyGeo.scale(1.18, 0.92, 1.02);
+      EnemyBlob.sharedBodyGeo.translate(0, 0.42, 0); // Pivot firmly at ground contact
+    }
+    this.slimeShaderMat = EnemyBlob.createSlimeShaderMat();
+    this.bodyMesh = new THREE.Mesh(EnemyBlob.sharedBodyGeo, this.slimeShaderMat);
+    this.bodyMesh.renderOrder = 3;
     this.group.add(this.bodyMesh);
+
+    // Ultra-Optimized Single-Draw-Call InstancedMesh Translucent Acid-Lime Slime Trail!
+    const trailGeo = new THREE.CircleGeometry(0.42, 14);
+    trailGeo.rotateX(-Math.PI / 2);
+    const trailMat = new THREE.MeshBasicMaterial({
+      color: 0x98ff2a,
+      transparent: true,
+      opacity: 0.52,
+      depthWrite: false,
+      blending: THREE.NormalBlending
+    });
+    this.trailInstanced = new THREE.InstancedMesh(trailGeo, trailMat, EnemyBlob.TRAIL_COUNT);
+    this.trailInstanced.frustumCulled = false;
+    this.trailInstanced.renderOrder = 2;
+    this._trailDummy.scale.set(0, 0, 0);
+    this._trailDummy.updateMatrix();
+    for (let i = 0; i < EnemyBlob.TRAIL_COUNT; i++) {
+      this.trailInstanced.setMatrixAt(i, this._trailDummy.matrix);
+    }
+    this.trailInstanced.instanceMatrix.needsUpdate = true;
+    scene.add(this.trailInstanced);
+    this.lastTrailX = startX;
 
     // Simple Round Toon Style Shadow Decal
     const shadowGeo = new THREE.CircleGeometry(0.50, 24);
@@ -199,7 +350,16 @@ export class EnemyBlob {
     this.centerGooglyPupil.position.set(0.0, 0.0, 0.198);
     this.eyeCenterGroup.add(this.centerGooglyPupil);
 
-    // 4. Dual Twitching Satellite Eyestalks
+    // 4. Dual Twitching Satellite Eyestalks (translucent 1979 acid-lime stalk material)
+    const stalkMat = new THREE.MeshStandardMaterial({
+      color: 0x8cff28,
+      emissive: 0x1e4d00,
+      emissiveIntensity: 0.45,
+      roughness: 0.16,
+      metalness: 0.08,
+      transparent: true,
+      opacity: 0.84,
+    });
     const createStalkEye = (side: number) => {
       const stalkGroup = new THREE.Group();
       stalkGroup.position.set(side * 0.32, 0.72, 0.05);
@@ -207,7 +367,7 @@ export class EnemyBlob {
 
       const stalkMesh = new THREE.Mesh(
         new THREE.CylinderGeometry(0.045, 0.065, 0.28, 8),
-        slimeMat
+        stalkMat
       );
       stalkMesh.position.y = 0.14;
       stalkMesh.rotation.z = side * -0.22;
@@ -255,19 +415,24 @@ export class EnemyBlob {
     // 5. EPIC STYLIZED COMIC DEATH FX POOL (Zero remains left behind!)
     // -----------------------------------------------------------
 
-    // A. 28 Juicy Stretched Candy Slime Droplets
-    const dropletColors = [0x39ff14, 0x00f5ff, 0xff007f, 0xffea00];
+    // A. 28 Juicy Stretched Candy Slime Droplets (shared static geometries & materials = ZERO spawn allocation!)
+    if (!EnemyBlob.sharedDropletGeo) {
+      EnemyBlob.sharedDropletGeo = new THREE.SphereGeometry(0.11, 10, 10);
+      EnemyBlob.sharedDropletPipGeo = new THREE.SphereGeometry(0.035, 6, 6);
+      EnemyBlob.sharedShineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const dropletColors = [0x39ff14, 0x00f5ff, 0xff007f, 0xffea00];
+      EnemyBlob.sharedDropletMats = dropletColors.map((col) => new THREE.MeshBasicMaterial({ color: col }));
+    }
     for (let i = 0; i < 28; i++) {
       const dropGroup = new THREE.Group();
-      const col = dropletColors[i % dropletColors.length];
-      const dropMat = new THREE.MeshBasicMaterial({ color: col });
+      const dropMat = EnemyBlob.sharedDropletMats![i % EnemyBlob.sharedDropletMats!.length];
 
       // Core elongated sphere
-      const core = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 10), dropMat);
+      const core = new THREE.Mesh(EnemyBlob.sharedDropletGeo, dropMat);
       dropGroup.add(core);
 
       // White shine pip
-      const pip = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 6), shineMat);
+      const pip = new THREE.Mesh(EnemyBlob.sharedDropletPipGeo!, EnemyBlob.sharedShineMat!);
       pip.position.set(0.035, 0.035, 0.04);
       dropGroup.add(pip);
 
@@ -706,39 +871,69 @@ export class EnemyBlob {
       this.shadowMesh.visible = this.active && !this.isDying;
     }
 
-    // B. Hop Launch
-    if (this.hopTimer >= this.hopCooldown && this.isGrounded) {
-      this.hopTimer = 0;
-      this.isGrounded = false;
-
-      const hopVelY = 5.2 + Math.random() * 1.5;
-      const hopVelX = this.patrolDir * (1.8 + Math.random() * 0.8);
-      this.velocity.set(hopVelX, hopVelY, 0);
-
-      this.bodyMesh.scale.set(0.75, 1.45, 0.75);
+    // Update GPU Wobble & Translucency Shader Uniforms
+    if (this.slimeShaderMat) {
+      this.slimeShaderMat.uniforms.uTime.value = time;
+      this.slimeShaderMat.uniforms.uSlideSpeed.value = Math.abs(this.velocity.x) * 0.5 + 0.5;
+      this.slimeShaderMat.uniforms.uJiggle.value = this.jiggleTimer > 0 ? (this.jiggleTimer / 0.38) : 0.0;
     }
 
-    // C. Airborne Flight & Gravity
-    if (!this.isGrounded) {
+    // B. Smooth Ground-Sliding Peristaltic Locomotion (glides along ground leaving a glowing slime trail!)
+    if (this.isGrounded) {
+      const surge = 0.65 + 0.55 * (0.5 + 0.5 * Math.sin(time * 5.0 + this.minX));
+      this.velocity.x = this.patrolDir * 2.15 * surge;
+      this.position.x += this.velocity.x * dt;
+      this.position.y = surfaceY;
+
+      // Subtle horizontal inchworm stretch synchronized with glide surge
+      if (this.jiggleTimer <= 0 && this.landingSquashTimer <= 0) {
+        const stretchX = 1.0 + (surge - 0.85) * 0.28;
+        const squashY = 1.0 / Math.sqrt(stretchX);
+        this.bodyMesh.scale.set(stretchX, squashY, 1.0);
+      }
+
+      // Deposit pooled InstancedMesh slime puddle trail as it slides!
+      this.trailSpawnDist += Math.abs(this.position.x - this.lastTrailX);
+      this.lastTrailX = this.position.x;
+      if (this.trailSpawnDist >= 0.42) {
+        this.trailSpawnDist = 0;
+        const idx = this.trailCursor;
+        this.trailCursor = (this.trailCursor + 1) % EnemyBlob.TRAIL_COUNT;
+        this.trailPosX[idx] = this.position.x - this.patrolDir * 0.18;
+        this.trailPosY[idx] = surfaceY + 0.025;
+        this.trailAge[idx] = 0;
+        this.trailMax[idx] = 2.6 + Math.random() * 0.6;
+      }
+    } else {
+      // Airborne gravity drop onto surface
       this.velocity.y -= 18.0 * dt;
       this.position.x += this.velocity.x * dt;
       this.position.y += this.velocity.y * dt;
 
-      const stretchY = THREE.MathUtils.clamp(1.0 + this.velocity.y * 0.05, 0.7, 1.4);
-      const stretchXZ = 1.0 / Math.sqrt(stretchY);
-      this.bodyMesh.scale.set(stretchXZ, stretchY, stretchXZ);
-
-      // Touchdown check
       if (this.position.y <= surfaceY && this.velocity.y <= 0) {
         this.position.y = surfaceY;
-        this.velocity.set(0, 0, 0);
+        this.velocity.y = 0;
         this.isGrounded = true;
-
         this.landingSquashTimer = 0.22;
-        this.bodyMesh.scale.set(1.45, 0.52, 1.45);
       }
-    } else {
-      this.position.y = surfaceY;
+    }
+
+    // Update Single-Draw-Call InstancedMesh Slime Trail Evaporation!
+    let trailDirty = false;
+    for (let i = 0; i < EnemyBlob.TRAIL_COUNT; i++) {
+      if (this.trailAge[i] < this.trailMax[i]) {
+        this.trailAge[i] += dt;
+        const t = Math.min(1, this.trailAge[i] / this.trailMax[i]);
+        const s = (1.0 - t * t) * (0.95 + 0.15 * Math.sin(i * 1.7));
+        this._trailDummy.position.set(this.trailPosX[i], this.trailPosY[i], (i % 3 - 1) * 0.08);
+        this._trailDummy.scale.set(s * 1.35, 1, s * 0.85);
+        this._trailDummy.updateMatrix();
+        this.trailInstanced.setMatrixAt(i, this._trailDummy.matrix);
+        trailDirty = true;
+      }
+    }
+    if (trailDirty) {
+      this.trailInstanced.instanceMatrix.needsUpdate = true;
     }
 
     // D. Landing Recovery

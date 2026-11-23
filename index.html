@@ -54,7 +54,7 @@
       height: 100%;
       display: block;
       touch-action: none;
-      cursor: crosshair;
+      cursor: default;
     }
 
     /* Sci-Fi Targeting Reticle Cursor */
@@ -1212,6 +1212,7 @@
         <button id="btn-shield" class="icon-btn" title="Toggle Force Field On/Off (B)">🛡️ FORCEFIELD: OFF [B]</button>
         <button id="btn-forcefield-mode" class="icon-btn" title="Select Force Field Mode: Ball vs Bubble">MODE: ⚽ BALL</button>
         <button id="btn-level" class="icon-btn" title="Toggle Level 1 / 2 (L)" style="color: #39ff14; border-color: #39ff14;">🪐 LEVEL 2: ALIEN [L]</button>
+        <button id="btn-hangar" class="icon-btn" title="Customize Jones & Jetpacks" style="color: #ff9e44; border-color: #ff7f2a;">🛠️ HANGAR</button>
         <button id="btn-audio" class="icon-btn" title="Toggle Sound">🔊 SFX ON</button>
       </div>
 
@@ -1243,6 +1244,11 @@
                 <span class="pill-notch"></span>
                 <span class="pill-label">PLAY</span>
                 <span class="pill-arrow">▶</span>
+              </button>
+              <button id="menu-btn-hangar" class="menu-pill-btn" aria-label="Character Hangar Customization">
+                <span class="pill-notch"></span>
+                <span class="pill-label">CUSTOMIZE</span>
+                <span class="pill-arrow">🛠️</span>
               </button>
               <button id="menu-btn-options" class="menu-pill-btn" aria-label="Game Settings">
                 <span class="pill-notch"></span>
@@ -1403,6 +1409,353 @@
         </div>
       </div>
 
+      <!-- Always-Visible 1979 16-Bit Pixel-Art Keyboard & Gamepad Control Plates (Click either to zoom large center-screen!) -->
+      <style>
+        .pixel-ctrl-thumb {
+          width: clamp(165px, 18.5vw, 250px);
+          max-width: 48%;
+          height: auto;
+          image-rendering: pixelated;
+          image-rendering: crisp-edges;
+          opacity: 0.92;
+          pointer-events: auto;
+          cursor: pointer;
+          filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.78));
+          transition: transform 0.2s cubic-bezier(0.22, 1.28, 0.36, 1), filter 0.2s ease, opacity 0.2s ease;
+        }
+        .pixel-ctrl-thumb:hover {
+          opacity: 1;
+          transform: translateY(-5px) scale(1.05);
+          filter: drop-shadow(0 0 14px rgba(166, 255, 56, 0.72));
+        }
+        #controls-zoom-modal {
+          position: fixed;
+          inset: 0;
+          z-index: 9998;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(10, 6, 14, 0.78);
+          backdrop-filter: blur(5px);
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 0.26s ease;
+        }
+        #controls-zoom-modal.open {
+          opacity: 1;
+          pointer-events: auto;
+        }
+        #controls-zoom-card {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 14px;
+          transform: translateY(44vh) scale(0.32);
+          opacity: 0;
+          transition: transform 0.38s cubic-bezier(0.18, 1.22, 0.32, 1), opacity 0.26s ease;
+        }
+        #controls-zoom-modal.open #controls-zoom-card {
+          transform: translateY(0) scale(1);
+          opacity: 1;
+        }
+        #controls-zoom-img {
+          width: min(88vw, 840px);
+          max-height: 78vh;
+          height: auto;
+          image-rendering: pixelated;
+          image-rendering: crisp-edges;
+          filter: drop-shadow(0 0 28px rgba(255, 108, 181, 0.45)) drop-shadow(0 16px 38px rgba(0, 0, 0, 0.85));
+        }
+        #btn-close-controls-zoom {
+          padding: 10px 24px;
+          background: linear-gradient(180deg, #ff7f2a 0%, #c94714 100%);
+          color: #fff8e6;
+          border: 2.5px solid #a6ff38;
+          border-radius: 6px;
+          font-family: 'Press Start 2P', monospace;
+          font-size: 11px;
+          letter-spacing: 1px;
+          cursor: pointer;
+          box-shadow: 0 0 16px rgba(166, 255, 56, 0.45), 0 4px 0 #4a1e0b;
+          transition: transform 0.14s ease, filter 0.14s ease;
+        }
+        #btn-close-controls-zoom:hover {
+          filter: brightness(1.14);
+          transform: translateY(-2px);
+        }
+        #btn-close-controls-zoom:active {
+          transform: translateY(2px);
+        }
+      </style>
+      <div id="pixel-controls-hud" style="
+        position: fixed;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 20;
+        pointer-events: none;
+        display: flex;
+        justify-content: center;
+        align-items: flex-end;
+        gap: 10px;
+        max-width: calc(100vw - 560px);
+      ">
+        <img
+          id="thumb-controls-keyboard"
+          class="pixel-ctrl-thumb"
+          src="/ui/controls-keyboard-pixel.svg?v=2"
+          alt="Keyboard Controls Diagram (Click to Enlarge)"
+          title="Click to enlarge Keyboard Controls"
+        />
+        <img
+          id="thumb-controls-gamepad"
+          class="pixel-ctrl-thumb"
+          src="/ui/controls-gamepad-pixel.svg?v=2"
+          alt="Gamepad Controls Diagram (Click to Enlarge)"
+          title="Click to enlarge Gamepad Controls"
+        />
+      </div>
+
+      <!-- Triple-AAA 1979 Hangar Character Customization Overlay -->
+      <style>
+        #hangar-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 8500;
+          pointer-events: none;
+          display: flex;
+          justify-content: flex-end;
+          align-items: center;
+          padding: 24px 28px;
+        }
+        #hangar-overlay.hidden {
+          display: none;
+        }
+        #hangar-panel {
+          pointer-events: auto;
+          width: min(350px, 88vw);
+          background: rgba(20, 12, 18, 0.86);
+          border: 2.5px solid #ff7f2a;
+          border-radius: 12px;
+          padding: 18px 18px 16px;
+          box-shadow: 0 0 28px rgba(255, 108, 181, 0.35), 0 12px 36px rgba(0, 0, 0, 0.82);
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          backdrop-filter: blur(6px);
+        }
+        .hangar-title {
+          font-family: 'Press Start 2P', monospace;
+          font-size: 13px;
+          color: #a6ff38;
+          text-shadow: 0 0 10px rgba(166, 255, 56, 0.55);
+          letter-spacing: 1px;
+        }
+        .hangar-sub {
+          font-family: 'Share Tech Mono', monospace;
+          font-size: 12px;
+          color: #ff9ed0;
+          letter-spacing: 0.8px;
+          margin-top: -6px;
+        }
+        .jetpack-card {
+          pointer-events: auto;
+          cursor: pointer;
+          text-align: left;
+          padding: 12px 13px;
+          background: rgba(44, 24, 16, 0.88);
+          border: 2px solid #8a5232;
+          border-radius: 8px;
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          transition: transform 0.14s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+        }
+        .jetpack-card:hover {
+          transform: translateX(-3px);
+          border-color: #ff7f2a;
+        }
+        .jetpack-card.selected {
+          border-color: #a6ff38;
+          background: rgba(28, 42, 18, 0.92);
+          box-shadow: 0 0 16px rgba(166, 255, 56, 0.42);
+        }
+        .jetpack-card-name {
+          font-family: 'Press Start 2P', monospace;
+          font-size: 10px;
+          color: #fff4d6;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .jetpack-card.selected .jetpack-card-name {
+          color: #a6ff38;
+        }
+        .jetpack-card-desc {
+          font-family: 'Share Tech Mono', monospace;
+          font-size: 11.5px;
+          color: #d6c5b3;
+          line-height: 1.35;
+        }
+        .hangar-drag-hint {
+          position: fixed;
+          bottom: 116px;
+          left: 34%;
+          transform: translateX(-50%);
+          padding: 6px 14px;
+          background: rgba(16, 10, 14, 0.78);
+          border: 1.5px solid #22baff;
+          border-radius: 999px;
+          font-family: 'Share Tech Mono', monospace;
+          font-size: 12px;
+          color: #7ee3ff;
+          letter-spacing: 1px;
+          text-shadow: 0 0 8px rgba(34, 186, 255, 0.7);
+          pointer-events: none;
+        }
+        .hangar-btn-row {
+          display: flex;
+          gap: 10px;
+          margin-top: 4px;
+        }
+        .hangar-btn {
+          flex: 1;
+          padding: 10px 10px;
+          border-radius: 6px;
+          font-family: 'Press Start 2P', monospace;
+          font-size: 9px;
+          cursor: pointer;
+          border: 2px solid #a6ff38;
+          background: linear-gradient(180deg, #ff7f2a 0%, #bf4612 100%);
+          color: #fff8e6;
+          box-shadow: 0 3px 0 #4a1c08;
+        }
+        .hangar-btn.secondary {
+          background: rgba(44, 26, 36, 0.92);
+          border-color: #ff6cb5;
+          color: #ffb8dc;
+          box-shadow: 0 3px 0 #260d1c;
+        }
+        .hangar-btn:hover {
+          filter: brightness(1.14);
+        }
+      </style>
+      <div id="hangar-overlay" class="hidden">
+        <div class="hangar-drag-hint">↔ DRAG TO SPIN JONES 360° · HDRI + SUN + CRT BLUE LIGHT</div>
+        <div id="hangar-panel">
+          <div class="hangar-title">🛠️ JONES HANGAR · 79</div>
+          <div class="hangar-sub">SELECT JETPACK LOADOUT</div>
+
+          <button id="btn-jp-mk79" type="button" class="jetpack-card selected">
+            <span class="jetpack-card-name"><span>MK-79 CHROME</span><span>★ 1979</span></span>
+            <span class="jetpack-card-desc">Sleek mirror-chrome twin-thruster orbital pack with red-orange racing stripes &amp; high-output plasma bells.</span>
+          </button>
+
+          <button id="btn-jp-economist" type="button" class="jetpack-card">
+            <span class="jetpack-card-name"><span>THE ECONOMIST</span><span>⚙ 1968</span></span>
+            <span class="jetpack-card-desc">Older vintage budget model — boxy riveted olive-steel tank, brass reserve boiler, copper pipes &amp; welded square vents.</span>
+          </button>
+
+          <button id="btn-hangar-jetpack-test" type="button" class="hangar-btn" style="width:100%;background:linear-gradient(180deg,#22baff 0%,#0b63a8 100%);border-color:#7ef0ff;box-shadow:0 3px 0 #073359;">
+            🔥 HOLD: TEST JETPACK [SPACE / RT]
+          </button>
+
+          <button id="btn-hangar-pixel-toggle" type="button" class="hangar-btn secondary" style="width:100%;">
+            👾 HDRI STYLE: 16-BIT PIXEL ART
+          </button>
+
+          <div class="hangar-btn-row">
+            <button id="btn-hangar-back" type="button" class="hangar-btn secondary">◀ MENU</button>
+            <button id="btn-hangar-launch" type="button" class="hangar-btn">🚀 LAUNCH</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Large Center-Screen Pixel-Art Controls Zoom Popup -->
+      <div id="controls-zoom-modal" aria-hidden="true">
+        <div id="controls-zoom-card">
+          <img id="controls-zoom-img" src="/ui/controls-keyboard-pixel.svg?v=2" alt="Enlarged Controls Diagram" />
+          <button id="btn-close-controls-zoom" type="button">✕ CLOSE [ESC]</button>
+        </div>
+      </div>
+
+      <!-- Always-Visible 1979 Telemetry FPS Counter -->
+      <div id="fps-counter" aria-live="off" style="
+        position: fixed;
+        top: 10px;
+        left: 12px;
+        z-index: 9999;
+        pointer-events: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 10px;
+        background: rgba(16, 12, 10, 0.82);
+        border: 1.5px solid #a6ff38;
+        border-radius: 6px;
+        box-shadow: 0 0 12px rgba(166, 255, 56, 0.35), inset 0 0 6px rgba(166, 255, 56, 0.14);
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        color: #a6ff38;
+        text-shadow: 0 0 6px rgba(166, 255, 56, 0.65);
+      ">
+        <span id="fps-dot" style="width:7px;height:7px;border-radius:50%;background:#a6ff38;box-shadow:0 0 8px #a6ff38;display:inline-block;"></span>
+        <span id="fps-value">60 FPS</span>
+        <span id="fps-ms" style="color:#ff9e44;font-size:11px;">16.7ms</span>
+      </div>
+
+      <!-- 1979 Retro-Space Preloader Overlay (Blocks jerky startup until all assets & shaders are ready!) -->
+      <div id="boot-preloader" style="
+        position: fixed;
+        inset: 0;
+        z-index: 9000;
+        background: radial-gradient(circle at 50% 42%, #24162c 0%, #120b16 62%, #08050a 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        transition: opacity 0.35s ease;
+      ">
+        <div style="
+          font-family: 'Press Start 2P', monospace;
+          font-size: clamp(18px, 3vw, 30px);
+          color: #ff7f2a;
+          text-shadow: 0 0 18px rgba(255, 127, 42, 0.75), 3px 3px 0 #5c3622;
+          letter-spacing: 2px;
+          text-align: center;
+        ">JETPACK JONES // 1979</div>
+        <div style="
+          width: min(380px, 80vw);
+          height: 16px;
+          background: rgba(255, 255, 255, 0.08);
+          border: 2px solid #ff6cb5;
+          border-radius: 999px;
+          padding: 2px;
+          box-shadow: 0 0 16px rgba(255, 108, 181, 0.35);
+          overflow: hidden;
+        ">
+          <div id="boot-progress-bar" style="
+            width: 6%;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #ff7f2a 0%, #ff6cb5 52%, #a6ff38 100%);
+            box-shadow: 0 0 12px rgba(166, 255, 56, 0.7);
+            transition: width 0.14s ease-out;
+          "></div>
+        </div>
+        <div id="boot-status-text" style="
+          font-family: 'Share Tech Mono', monospace;
+          font-size: 13px;
+          color: #a6ff38;
+          letter-spacing: 1.2px;
+          text-transform: uppercase;
+        ">BOOTING 1979 FLIGHT SYSTEMS... 0%</div>
+      </div>
+
       <!-- Start / Game Over Modal -->
       <div id="overlay-screen" class="hidden">
         <div id="overlay-card" class="overlay-card-container">
@@ -1415,13 +1768,6 @@
             <button id="btn-gameover-mainmenu" class="btn-action btn-danger">MAIN MENU</button>
           </div>
         </div>
-      </div>
-      <!-- Sci-Fi Targeting Reticle Cursor -->
-      <div id="reticle">
-        <div class="reticle-ring"></div>
-        <div class="reticle-cross-h"></div>
-        <div class="reticle-cross-v"></div>
-        <div class="reticle-dot"></div>
       </div>
     </div>
   </div>

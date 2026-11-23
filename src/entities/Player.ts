@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { MixamoCharacterRig, JetpackModelId } from './MixamoCharacterRig';
+import { JetpackThrusterVFX } from './JetpackThrusterVFX';
 
 export const GROUND_Y = -3.70;
 
@@ -60,7 +62,8 @@ export enum PlayerState {
   FALL = 'fall',
   JETPACK = 'jetpack',
   CROUCH = 'crouch',
-  CROUCH_WALK = 'crouch_walk'
+  CROUCH_WALK = 'crouch_walk',
+  SLIDE = 'slide'
 }
 
 /**
@@ -88,7 +91,7 @@ export class Player {
   public height: number = 1.95;
 
   public get isCrouching(): boolean {
-    return this.state === PlayerState.CROUCH || this.state === PlayerState.CROUCH_WALK;
+    return this.state === PlayerState.CROUCH || this.state === PlayerState.CROUCH_WALK || this.state === PlayerState.SLIDE;
   }
 
   // Triple-AAA Multi-Layer Bubble Force Field System
@@ -99,13 +102,29 @@ export class Player {
   private shieldRingMesh1!: THREE.Mesh;
   private shieldRingMesh2!: THREE.Mesh;
   private shieldNodes: THREE.Mesh[] = [];
-  private shieldMat!: THREE.MeshPhysicalMaterial;
+  private shieldMat!: THREE.MeshStandardMaterial;
   private shieldGridMat!: THREE.LineBasicMaterial;
   public shieldWobbleTimer: number = 0;
   public shieldWobbleImpulse: THREE.Vector2 = new THREE.Vector2();
   public onShieldDeflect?: () => void;
-  // Bubble Force Field Ball Mode & Bouncy Ball Physics
-  public forcefieldMode: 'ball' | 'shield' = 'ball';
+  // Bubble Force Field Mode (defaults to adaptive 'shield' bubble so player position/animations are NEVER displaced!)
+  public forcefieldMode: 'ball' | 'shield' = 'shield';
+  public getMuzzleWorldPosition(out?: THREE.Vector3): THREE.Vector3 {
+    const fallback = new THREE.Vector3(
+      this.position.x + (this.facingRight ? 0.65 : -0.65),
+      this.position.y + 1.42,
+      0
+    );
+    const pos = this.mixamoRig?.isLoaded
+      ? this.mixamoRig.getMuzzleWorldPosition(fallback)
+      : fallback;
+    if (out) {
+      out.set(pos.x, pos.y, 0);
+      return out;
+    }
+    return new THREE.Vector3(pos.x, pos.y, 0);
+  }
+
   public get isBallMode(): boolean {
     return this.shieldActive && (this.forcefieldMode === 'ball');
   }
@@ -171,13 +190,93 @@ export class Player {
   private flameMidMatLeft!: THREE.MeshBasicMaterial;
   private flameMidMatRight!: THREE.MeshBasicMaterial;
 
-  // Footstep Sound Callback
-  public onFootstep?: () => void;
+  // Footstep, Jump, Slide & Landing Sound Callbacks
+  public onFootstep?: (mode: 'walk' | 'run' | 'crouch') => void;
+  public onJump?: (isDoubleJump: boolean) => void;
+  public onSlide?: () => void;
+  public onLand?: (impactStrength: number) => void;
+  public onDeath?: () => void;
+
+  public whenReady(onProgress?: (pct: number, label: string) => void): Promise<void> {
+    if (onProgress) {
+      this.mixamoRig.onProgress = onProgress;
+    }
+    return this.mixamoRig.readyPromise;
+  }
+
+  public setJetpackModel(model: JetpackModelId) {
+    this.mixamoRig?.setJetpackModel(model);
+  }
+
+  public getJetpackModel(): JetpackModelId {
+    return this.mixamoRig?.currentJetpackModel ?? 'mk79';
+  }
+
+  public setPixelMode(enabled: boolean) {
+    this.jetpackVfx?.setPixelMode(enabled);
+  }
+
+  public updateHangarShowcase(dt: number, isJetpacking: boolean, hoverHeight: number) {
+    const state = isJetpacking
+      ? PlayerState.JETPACK
+      : (hoverHeight > 0.08 ? PlayerState.FALL : PlayerState.IDLE);
+    const throttle = isJetpacking ? 0.72 : 0.0;
+    this.mixamoRig?.update(
+      dt,
+      state,
+      0,
+      isJetpacking ? 0.2 : (hoverHeight > 0.08 ? -2.2 : 0),
+      hoverHeight <= 0.04,
+      false,
+      throttle,
+      hoverHeight,
+      hoverHeight > 0.08,
+      undefined,
+      false,
+      isJetpacking
+    );
+    this.mesh.updateMatrixWorld(true);
+    if (this.mixamoRig?.isLoaded) {
+      this.mixamoRig.getNozzleWorldPositions(this.nozzleWorldL, this.nozzleWorldR, this.mesh.position);
+      this.jetpackVfx.update(
+        dt,
+        throttle,
+        this.nozzleWorldL,
+        this.nozzleWorldR,
+        0,
+        0,
+        GROUND_Y,
+        false,
+        isJetpacking
+      );
+    }
+  }
   private prevStridePhase: number = 0;
 
   // Skeletal Bones Hierarchy
   private rigRoot: THREE.Group;
+  private mixamoRig!: MixamoCharacterRig;
+  private jetpackVfx!: JetpackThrusterVFX;
+  private readonly nozzleWorldL = new THREE.Vector3();
+  private readonly nozzleWorldR = new THREE.Vector3();
   private hipBone: THREE.Group;
+
+  // Next-Gen Triple-AAA Character Controller & Double Jump State
+  private maxJumps: number = 2;
+  private jumpsRemaining: number = 2;
+  private coyoteTimer: number = 0;
+  private jumpBufferTimer: number = 0;
+  private airJumpHoldTimer: number = 0;
+  private jumpCutApplied: boolean = false;
+  private slideTimer: number = 0;
+  private slideCooldown: number = 0;
+  private slideDir: number = 1;
+  private prevCrouchPressed: boolean = false;
+  private usedJetpackThisAir: boolean = false;
+  private wasJetpackingLastFrame: boolean = false;
+  private jetpackHoverHangTimer: number = 0;
+  public isHoverHanging: boolean = false;
+  public onHaptic?: (durationMs: number, weak: number, strong: number) => void;
   private torsoBone: THREE.Group;
   private headBone: THREE.Group;
 
@@ -290,6 +389,17 @@ export class Player {
     this.rigRoot = new THREE.Group();
     this.mesh.add(this.rigRoot);
 
+    // Next-Gen Skinned Mixamo Character Rig + 1979 Retro Chrome Jetpack + GPU Thruster VFX
+    this.mixamoRig = new MixamoCharacterRig(scene);
+    this.jetpackVfx = new JetpackThrusterVFX(scene);
+    this.rigRoot.add(this.mixamoRig.container);
+    this.mixamoRig.onFootstep = (mode) => this.onFootstep?.(mode);
+    this.mixamoRig.onLoaded = () => {
+      if (this.hipBone) {
+        this.hipBone.visible = false;
+      }
+    };
+
     // Dynamic Lights: Soft vibrant cyan-blue thruster wash
     this.thrusterLight = new THREE.PointLight(0x00bbff, 0, 18, 1.2);
     scene.add(this.thrusterLight);
@@ -327,14 +437,12 @@ export class Player {
       color: 0xf5c2a3,
       roughness: 0.45,
     });
-    const amberVisor = new THREE.MeshPhysicalMaterial({
+    const amberVisor = new THREE.MeshStandardMaterial({
       color: 0xff8800,
-      roughness: 0.04,
-      metalness: 0.15,
-      transmission: 0.55,
+      roughness: 0.08,
+      metalness: 0.25,
       transparent: true,
-      opacity: 0.95,
-      reflectivity: 0.95,
+      opacity: 0.90,
     });
     const chromeMetal = new THREE.MeshStandardMaterial({
       color: 0xf0f0f0,
@@ -396,6 +504,7 @@ export class Player {
     // --------------------------------------------------------
     this.hipBone = new THREE.Group();
     this.hipBone.position.set(0, 1.05, 0);
+    this.hipBone.visible = false; // Never show legacy procedural character while Mixamo Jones loads!
     this.rigRoot.add(this.hipBone);
 
     // --------------------------------------------------------
@@ -1117,13 +1226,12 @@ export class Player {
       metalness: 0.88,
       roughness: 0.22,
     });
-    const vacuumTubeGlassMat = new THREE.MeshPhysicalMaterial({
+    const vacuumTubeGlassMat = new THREE.MeshStandardMaterial({
       color: 0x88ddff,
-      transmission: 0.88,
       transparent: true,
-      opacity: 0.82,
-      roughness: 0.06,
-      metalness: 0.05,
+      opacity: 0.52,
+      roughness: 0.08,
+      metalness: 0.15,
     });
     const neonBlueFilamentMat = new THREE.MeshBasicMaterial({
       color: 0x00f5ff,
@@ -1435,16 +1543,16 @@ export class Player {
   private initShieldForceField(scene: THREE.Scene) {
     this.shieldGroup = new THREE.Group();
 
-    // 1. Triple-AAA Ultra-Clear Iridescent Plasma Bubble (Radius 1.65m completely envelopes Jones including helmet)
-    const sphereGeo = new THREE.SphereGeometry(1.65, 36, 28);
-    this.shieldMat = new THREE.MeshPhysicalMaterial({
+    // 1. Triple-AAA Ultra-Clear Iridescent Plasma Bubble (Zero-Transmission MeshStandardMaterial = 0ms stall!)
+    const sphereGeo = new THREE.SphereGeometry(1.65, 28, 22);
+    this.shieldMat = new THREE.MeshStandardMaterial({
       color: 0x00f5ff,
-      emissive: 0x001525,
-      roughness: 0.01,
-      metalness: 0.02,
-      transmission: 0.98,
+      emissive: 0x002238,
+      emissiveIntensity: 0.75,
+      roughness: 0.04,
+      metalness: 0.12,
       transparent: true,
-      opacity: 0.12,
+      opacity: 0.15,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -1522,6 +1630,9 @@ export class Player {
     if (this.shieldActive) {
       this.shieldWobbleTimer = 0.32;
       this.shieldWobbleImpulse.set(0, 1);
+      if (this.shieldGroup) {
+        this.shieldGroup.position.set(this.position.x, this.position.y + 1.0, this.position.z);
+      }
     }
     return this.shieldActive;
   }
@@ -1530,6 +1641,19 @@ export class Player {
     this.position.set(startX, startY, startZ);
     this.velocity.set(0, 0, 0);
     this.isGrounded = true;
+    this.jumpsRemaining = this.maxJumps;
+    this.coyoteTimer = 0;
+    this.jumpBufferTimer = 0;
+    this.airJumpHoldTimer = 0;
+    this.jumpCutApplied = false;
+    this.slideTimer = 0;
+    this.slideCooldown = 0;
+    this.prevCrouchPressed = false;
+    this.usedJetpackThisAir = false;
+    this.wasJetpackingLastFrame = false;
+    this.jetpackHoverHangTimer = 0;
+    this.jetpackVfx?.reset();
+    this.mixamoRig?.reset();
     this.facingRight = true;
     this.state = PlayerState.IDLE;
     this.life = 100;
@@ -1704,10 +1828,20 @@ export class Player {
     }
     this.currentAimAngle = aimAngle;
 
-    // Calculate exact muzzle position from the physical blaster barrel tip
+    // Calculate exact muzzle position (Colt Peacemaker Barrel Tip when loaded, else procedural blaster tip)
     this.mesh.updateWorldMatrix(true, true);
     const muzzlePos = new THREE.Vector3();
-    this.bubbleBurstGroup.getWorldPosition(muzzlePos);
+    if (this.mixamoRig?.isLoaded) {
+      this.mixamoRig.triggerShoot(aimAngle);
+      this.onHaptic?.(42, 0.34, 0.22);
+      const barrelTip = this.mixamoRig.getMuzzleWorldPosition(
+        new THREE.Vector3(this.position.x + (this.facingRight ? 0.65 : -0.65), this.position.y + 1.38, 0)
+      );
+      muzzlePos.copy(barrelTip);
+      muzzlePos.z = 0; // Keep laser strictly on the z = 0 gameplay plane for crisp hit detection!
+    } else {
+      this.bubbleBurstGroup.getWorldPosition(muzzlePos);
+    }
 
     laser.position.copy(muzzlePos);
     laser.velocity.set(Math.cos(aimAngle) * 34, Math.sin(aimAngle) * 34, 0);
@@ -1751,9 +1885,16 @@ export class Player {
     this.invulnerableTime = 999;
     this.shieldActive = false;
     if (this.shieldGroup) this.shieldGroup.visible = false;
+    this.onDeath?.();
     // Dramatic death impulse: Jones reels backward
     const dir = knockbackDirX !== 0 ? knockbackDirX : (this.facingRight ? -1 : 1);
-    if (!this.isGrounded) {
+    if (this.mixamoRig?.isLoaded) {
+      this.mixamoRig.triggerDeath();
+      this.onHaptic?.(220, 0.70, 0.85);
+      // Gentle knockback slide while Mixamo Standing React Death Backward plays out cleanly
+      this.velocity.x = dir * (this.isGrounded ? 2.2 : 3.2);
+      this.velocity.y = this.isGrounded ? 0 : Math.min(this.velocity.y, 1.5);
+    } else if (!this.isGrounded) {
       // In air death: retain downward falling momentum under gravity for center-of-mass tumble
       this.velocity.x = dir * 3.8;
       this.velocity.y = Math.min(this.velocity.y, 2.0);
@@ -1764,10 +1905,12 @@ export class Player {
     }
     this.isGrounded = false;
 
-    // Jetpack blowout sparks & smoke burst
-    this.emitSparks(this.position.x, this.position.y + 0.8, dir * 3.0, 18);
-    this.emitSmoke(this.position.x - 0.25, this.position.y + 0.9, 0, 4);
-    this.emitSmoke(this.position.x + 0.25, this.position.y + 0.9, 0, 4);
+    // Dramatic Jetpack Blowout Sparks + Billowious Smoke Cloud Burst!
+    this.emitSparks(this.position.x, this.position.y + 0.9, dir * 3.2, 28);
+    this.emitSmoke(this.position.x - 0.25, this.position.y + 0.95, 0, 8);
+    this.emitSmoke(this.position.x + 0.25, this.position.y + 0.95, 0, 8);
+    this.mixamoRig?.getNozzleWorldPositions(this.nozzleWorldL, this.nozzleWorldR, this.position);
+    this.jetpackVfx.emitDoubleJumpBurst(this.nozzleWorldL, this.nozzleWorldR, this.velocity.x);
 
     // Drop blaster gun: pops out of hand and tumbles dynamically onto floor
     this.hasDroppedGun = true;
@@ -1875,7 +2018,11 @@ export class Player {
     mouseWorldTarget?: THREE.Vector3,
     hasMouseTarget: boolean = false,
     crouchPressed: boolean = false,
-    underPressure: boolean = false
+    underPressure: boolean = false,
+    jumpHeld: boolean = false,
+    jetpackThrottle: number = 1.0,
+    jetpackDirectTrigger: boolean = false,
+    isManualGamepadAim: boolean = false
   ) {
     this.animTimer += dt;
     if (this.invulnerableTime > 0) {
@@ -1890,9 +2037,22 @@ export class Player {
       return;
     }
 
-    // 1. Aim Tracking with Arc Limits (clears helmet dome cleanly)
+    // 1. Movement-Priority Facing Direction (with Twin-Stick Right-Stick Turn when aiming on Gamepad!)
+    if (moveX > 0.05) {
+      this.facingRight = true;
+    } else if (moveX < -0.05) {
+      this.facingRight = false;
+    } else if (isManualGamepadAim && mouseWorldTarget) {
+      if (mouseWorldTarget.x > this.position.x + 0.45) {
+        this.facingRight = true;
+      } else if (mouseWorldTarget.x < this.position.x - 0.45) {
+        this.facingRight = false;
+      }
+    }
+
+    // 2. Real-Time 360° Aim Tracking (Mouse Cursor, Gamepad Right Stick, or Locked-On Enemy)
     if (hasMouseTarget && mouseWorldTarget) {
-      const originY = this.position.y + 1.55; // Shoulder height
+      const originY = this.position.y + 1.48; // Shoulder height
       const originX = this.position.x;
       const rawAngle = Math.atan2(
         mouseWorldTarget.y - originY,
@@ -1905,19 +2065,12 @@ export class Player {
       }
       relAngle = THREE.MathUtils.euclideanModulo(relAngle + Math.PI, Math.PI * 2) - Math.PI;
 
-      // Stops comfortably below helmet dome (~45°), generous downward (~-72°)
-      const maxUpwardAngle = Math.PI * 0.25;
-      const maxDownwardAngle = -Math.PI * 0.40;
+      // Generous upward (~75° for overhead drones) & downward (~-80° for firing below while jetpack flying!)
+      const maxUpwardAngle = Math.PI * 0.42;
+      const maxDownwardAngle = -Math.PI * 0.44;
       const clampedRel = THREE.MathUtils.clamp(relAngle, maxDownwardAngle, maxUpwardAngle);
 
       this.currentAimAngle = this.facingRight ? clampedRel : (Math.PI - clampedRel);
-    }
-
-    // 2. Movement-Priority Facing Direction
-    if (moveX > 0.05) {
-      this.facingRight = true;
-    } else if (moveX < -0.05) {
-      this.facingRight = false;
     }
 
     // Smooth Turn Around
@@ -1933,37 +2086,11 @@ export class Player {
 
     // Check if an overhead platform ceiling blocks Jones from standing up
     // Evaluated for any player under a platform whose bottom is lower than Jones's standing height (1.95m)
+    // IMPORTANT: Forcefield bubble NEVER displaces Jones's rigRoot position/rotation or overrides Mixamo animations!
     let ceilingBlocked = false;
-    if (!this.isDying && this.isBallMode) {
-      // ----------------------------------------------------
-      // BALL MODE: INFLUENCED BY BOUNCE & ROTATION OF THE BALL
-      // Whole body tilts and dips with the ball, while shooting arm
-      // remains steady and aims/shoots cleanly without moving up and down
-      // ----------------------------------------------------
-      const squashDip = (1.0 - this.ballBounceSquash) * 0.55;
-
-      this.rigRoot.position.x = THREE.MathUtils.lerp(this.rigRoot.position.x, -this.velocity.x * 0.025, dt * 10.0);
-      this.rigRoot.position.y = THREE.MathUtils.lerp(this.rigRoot.position.y, 0.42 - squashDip, dt * 14.0);
-
-      // Jones' body tilts with the angular roll and centrifugal spin of the bouncy ball
-      const targetRollTilt = THREE.MathUtils.clamp(-this.ballAngularVelocity * 0.08, -0.60, 0.60);
-      this.rigRoot.rotation.z = THREE.MathUtils.lerp(this.rigRoot.rotation.z, targetRollTilt, dt * 8.0);
-
-      // Stabilized head and torso orientation
-      this.headBone.rotation.z = -targetRollTilt * 0.20;
-      this.torsoBone.rotation.z = targetRollTilt * 0.15;
-
-      // Natural leg tuck & suspension reaction inside the ball
-      this.frontThighBone.rotation.z = 0.38 + squashDip * 0.4;
-      this.frontShinBone.rotation.z = -0.70 - squashDip * 0.5;
-      this.backThighBone.rotation.z = 0.28 + squashDip * 0.4;
-      this.backShinBone.rotation.z = -0.58 - squashDip * 0.5;
-
-      // Back arm balances naturally
-      this.backArmBone.rotation.z = -0.35;
-      this.backForearmBone.rotation.z = 0.65;
-      // Front shooting arm is NOT moved up and down; it stays as it was to aim and shoot cleanly
-    } else if (!this.isDying) {
+    if (!this.isDying) {
+      this.rigRoot.position.set(0, 0, 0);
+      this.rigRoot.rotation.z = 0;
       for (const plat of platforms) {
         const platBottom = plat.y - plat.height / 2;
         const platLeft = plat.x - plat.width / 2;
@@ -1980,63 +2107,233 @@ export class Player {
       }
     }
 
-    const isActuallyCrouching = (this.isGrounded || ceilingBlocked) && (crouchPressed || ceilingBlocked) && !this.isDying;
+    // Running Slide Trigger & Physics (Sprint/Fast-Move + Crouch = Triple-AAA Momentum Slide!)
+    if (this.slideCooldown > 0) this.slideCooldown = Math.max(0, this.slideCooldown - dt);
+    const crouchJustPressed = crouchPressed && !this.prevCrouchPressed;
+    this.prevCrouchPressed = crouchPressed;
+
+    if (
+      crouchJustPressed &&
+      this.isGrounded &&
+      !this.isDying &&
+      this.slideTimer <= 0 &&
+      this.slideCooldown <= 0 &&
+      Math.abs(this.velocity.x) > 5.6
+    ) {
+      this.slideTimer = 0.92;
+      this.slideCooldown = 0.25;
+      this.slideDir = this.velocity.x >= 0 ? 1 : -1;
+      this.facingRight = this.slideDir > 0;
+      const boostSpeed = Math.max(Math.abs(this.velocity.x) + 3.6, this.hasHyperJetpack ? 16.0 : 14.0);
+      this.velocity.x = this.slideDir * boostSpeed;
+      this.emitDust(this.position.x, this.position.y, 10);
+      this.emitSparks(this.position.x, this.position.y + 0.08, -this.slideDir * 3.5, 6);
+      this.mixamoRig?.triggerSlide();
+      this.onSlide?.();
+      this.onHaptic?.(75, 0.35, 0.25);
+    }
+
+    if (this.slideTimer > 0) {
+      this.slideTimer = Math.max(0, this.slideTimer - dt);
+      if (!this.isGrounded || this.isDying) {
+        this.slideTimer = 0;
+      } else {
+        // Continuous low-profile dust & boot-spark trail during slide!
+        if (Math.random() < 0.45) {
+          this.emitDust(this.position.x - this.slideDir * 0.2, this.position.y, 1);
+        }
+        if (Math.random() < 0.22) {
+          this.emitSparks(this.position.x - this.slideDir * 0.25, this.position.y + 0.05, -this.slideDir * 2.5, 1);
+        }
+      }
+    }
+
+    const isSliding = this.slideTimer > 0 && this.isGrounded && !this.isDying;
+    const isActuallyCrouching = !isSliding && (this.isGrounded || ceilingBlocked) && (crouchPressed || ceilingBlocked) && !this.isDying;
+    const isLowProfile = isSliding || isActuallyCrouching;
     const walkSpeed = this.hasHyperJetpack ? 8.2 : 6.2;
     const runSpeed = this.hasHyperJetpack ? 14.0 : 10.5;
     const crouchSpeed = 2.8;
     const targetSpeed = isActuallyCrouching ? crouchSpeed : (runPressed ? runSpeed : walkSpeed);
-    
-    // Air acceleration and lateral control (Ultra-responsive retro upgrade: 64.0 airControl!)
-    const airControl = this.hasHyperJetpack ? 64.0 : 36.0;
-    const accel = this.isGrounded ? 45.0 : airControl;
+
+    // Next-Gen Triple-AAA Horizontal Acceleration & Crisp Stopping (zero ice-skating!)
+    const airControl = this.hasHyperJetpack ? 68.0 : 42.0;
+    const isBraking = Math.abs(moveX) < 0.05 || Math.sign(moveX) !== Math.sign(this.velocity.x);
+    const groundAccel = isBraking ? 78.0 : 58.0;
+    const accel = this.isGrounded ? groundAccel : airControl;
 
     const desiredVx = moveX * targetSpeed;
     if (this.isDying && !this.isGrounded) {
       // Retain lateral momentum during death tumble off platform edges
       this.velocity.x *= 0.985;
+    } else if (isSliding) {
+      // Long, silky momentum glide during Running Slide
+      this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, this.slideDir * 4.8, Math.min(1, dt * 2.0));
     } else {
-      this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, desiredVx, dt * (accel / 10));
+      this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, desiredVx, Math.min(1, dt * (accel / 10)));
+      if (Math.abs(moveX) < 0.05 && Math.abs(this.velocity.x) < 0.12 && this.isGrounded) {
+        this.velocity.x = 0;
+      }
     }
 
-    // 4. Jump & Jetpack (STRICTLY DISABLED when crouching or under low ceiling!)
-    if (jumpPressed && this.isGrounded && !isActuallyCrouching && !ceilingBlocked) {
-      this.velocity.y = 11.5;
-      this.isGrounded = false;
-      this.emitDust(this.position.x, this.position.y, 6);
+    // 4. Next-Gen Triple-AAA Jump, Coyote Time, Jump Buffering, Double Jump & Smart Jetpack
+    if (this.isGrounded) {
+      this.coyoteTimer = 0.12; // 120ms ledge forgiveness
+      this.jumpsRemaining = this.maxJumps;
+      this.airJumpHoldTimer = 0;
+      this.jumpCutApplied = false;
+    } else {
+      this.coyoteTimer = Math.max(0, this.coyoteTimer - dt);
     }
 
-    const isActuallyJetpacking = jetpackPressed && this.fuel > 0 && !isActuallyCrouching && !ceilingBlocked;
-    const gravity = -24.0;
-    const jetpackLift = this.hasHyperJetpack ? 46.0 : 32.0;
-    const maxClampedVy = this.hasHyperJetpack ? 12.5 : 10.0;
-    const fuelConsumptionRate = this.hasHyperJetpack ? 10.0 : 20.0;
+    if (jumpPressed) {
+      this.jumpBufferTimer = 0.14; // 140ms pre-landing jump buffer
+      this.airJumpHoldTimer = 0;
+    } else {
+      this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - dt);
+    }
+
+    let didJumpThisFrame = false;
+    if (this.jumpBufferTimer > 0 && !isActuallyCrouching && !ceilingBlocked) {
+      if (this.coyoteTimer > 0) {
+        // 1st Jump (Ground / Coyote — also supports Slide-Jump Momentum Cancel!)
+        if (this.slideTimer > 0) {
+          this.slideTimer = 0;
+          this.velocity.x *= 1.08; // Rewarding slide-jump long-jump boost!
+        }
+        this.velocity.y = 11.8;
+        this.isGrounded = false;
+        this.coyoteTimer = 0;
+        this.jumpBufferTimer = 0;
+        this.jumpsRemaining = this.maxJumps - 1;
+        this.jumpCutApplied = false;
+        didJumpThisFrame = true;
+        this.emitDust(this.position.x, this.position.y, 7);
+        this.mixamoRig?.triggerJump(false, this.position);
+        this.onJump?.(false);
+        this.onHaptic?.(45, 0.20, 0.08);
+      } else if (this.jumpsRemaining > 0) {
+        // 2nd Jump (Athletic Mid-Air Double Jump with Micro-Jetpack Burst + Dual-Ring Shockwave — NO spin!)
+        this.velocity.y = 11.4;
+        this.isGrounded = false;
+        this.jumpBufferTimer = 0;
+        this.jumpsRemaining--;
+        this.jumpCutApplied = false;
+        didJumpThisFrame = true;
+        this.emitDust(this.position.x, this.position.y + 0.1, 8);
+        this.mixamoRig?.triggerJump(true, this.position);
+        this.onJump?.(true);
+        this.mixamoRig?.getNozzleWorldPositions(this.nozzleWorldL, this.nozzleWorldR, this.position);
+        this.jetpackVfx?.emitDoubleJumpBurst(this.nozzleWorldL, this.nozzleWorldR, this.velocity.x);
+        this.onHaptic?.(80, 0.42, 0.24);
+      }
+    }
+
+    // Variable Jump Height: releasing Jump early cuts upward velocity for surgical short hops
+    if (!jumpHeld && !this.isGrounded && this.velocity.y > 3.5 && !this.jumpCutApplied) {
+      this.velocity.y *= 0.58;
+      this.jumpCutApplied = true;
+    }
+
+    // Superb Triple-AAA Jetpack Flight Handling:
+    // - Dedicated Gamepad RT/LT ignites INSTANTLY with smooth proportional hover-to-climb control!
+    // - Keyboard Space/W/Up smoothly hands off after double jump or sustained mid-air hold.
+    if (!this.isGrounded && jetpackPressed) {
+      this.airJumpHoldTimer += dt;
+    } else {
+      this.airJumpHoldTimer = 0;
+    }
+    const allowJetpack = jetpackDirectTrigger || (!didJumpThisFrame && (this.jumpsRemaining === 0 || this.airJumpHoldTimer > 0.20));
+    const isActuallyJetpacking = jetpackPressed && allowJetpack && this.fuel > 0 && !isActuallyCrouching && !ceilingBlocked;
+
+    // 1.0-second Hover-Hang Grace Window when releasing the Jetpack flying button in mid-air!
+    if (isActuallyJetpacking) {
+      this.jetpackHoverHangTimer = 0;
+    } else if (this.wasJetpackingLastFrame && !this.isGrounded && !crouchPressed) {
+      this.jetpackHoverHangTimer = 1.0; // Hold altitude for 1 full second before falling!
+    } else if (this.jetpackHoverHangTimer > 0) {
+      if (this.isGrounded || crouchPressed || this.isDying) {
+        this.jetpackHoverHangTimer = 0;
+      } else {
+        this.jetpackHoverHangTimer = Math.max(0, this.jetpackHoverHangTimer - dt);
+      }
+    }
+    this.wasJetpackingLastFrame = isActuallyJetpacking;
+
+    const isHoverHanging = !isActuallyJetpacking && this.jetpackHoverHangTimer > 0 && !this.isGrounded && !ceilingBlocked;
+    this.isHoverHanging = isHoverHanging;
+    const activeThrottle = isActuallyJetpacking
+      ? THREE.MathUtils.clamp(jetpackThrottle, 0.15, 1.0)
+      : (isHoverHanging ? 0.28 * (0.4 + 0.6 * (this.jetpackHoverHangTimer / 1.0)) : 0.0);
+
+    // Superb Horizontal Air-Carving & Instant Mid-Air Braking while Jetpack Flying OR Hover-Hanging!
+    if (isActuallyJetpacking || isHoverHanging) {
+      if (Math.abs(moveX) > 0.05) {
+        const flySpeed = this.hasHyperJetpack ? 13.4 : 11.0;
+        this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, moveX * flySpeed, Math.min(1, dt * 9.5));
+      } else {
+        // Crisp mid-air hover brake so you can stop on a dime to shoot drones or land cleanly!
+        this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, 0, Math.min(1, dt * 7.5));
+      }
+    }
+
+    const baseGravity = -28.5;
+    // Realistic accelerating gravity (brief apex hang, weighty natural fall!)
+    let gravity = baseGravity;
+    if (!this.isGrounded && !isActuallyJetpacking) {
+      if (Math.abs(this.velocity.y) < 1.8) {
+        gravity = baseGravity * 0.78;
+      } else if (this.velocity.y < -1.8) {
+        gravity = baseGravity * 1.25; // Crisp, realistic accelerating descent!
+      }
+    }
+
+    const maxClampedVy = this.hasHyperJetpack ? 12.8 : 11.8;
+    const fuelConsumptionRate = (this.hasHyperJetpack ? 6.5 : 10.5) * (0.45 + 0.55 * activeThrottle);
 
     if (isActuallyJetpacking) {
-      this.velocity.y += jetpackLift * dt;
-      this.fuel = Math.max(0, this.fuel - fuelConsumptionRate * dt);
+      this.usedJetpackThisAir = true;
       this.isGrounded = false;
-      // Gentle vertical hover dampening to prevent uncontrolled vertical slingshotting in tight spaces
-      if (this.velocity.y > maxClampedVy * 0.65) {
-        this.velocity.y *= 0.96;
+      this.fuel = Math.max(0, this.fuel - fuelConsumptionRate * dt);
+
+      // Velocity-Controlled Hover & Climb (Iron Man / Ratchet & Clank feel — ZERO ceiling-slingshot or yo-yoing!):
+      //  - Light trigger (0.15..0.55) = steady eye-level hover (targetVy ~ 0..+2.8)
+      //  - Full trigger / Space (1.0) = crisp controlled climb (+6.2 / +7.6 Hyper)
+      //  - Firing while jetpacking gently stabilizes altitude for rock-steady aerial aiming!
+      const maxClimbVy = this.hasHyperJetpack ? 7.6 : 6.2;
+      let targetVy = activeThrottle < 0.45
+        ? THREE.MathUtils.lerp(0.2, 2.4, activeThrottle / 0.45)
+        : THREE.MathUtils.lerp(2.4, maxClimbVy, (activeThrottle - 0.45) / 0.55);
+
+      if (this.shootTimer > 0 && activeThrottle < 0.85) {
+        // Gentle shooting hover-assist when firing in mid-air!
+        targetVy = THREE.MathUtils.lerp(targetVy, 0.35, 0.55);
       }
+
+      // Smooth, instant-response vertical thrust tracking (snappier when arresting a fall!)
+      const respRate = this.velocity.y < 0 ? 11.5 : 7.5;
+      this.velocity.y = THREE.MathUtils.lerp(this.velocity.y, targetVy, Math.min(1, dt * respRate));
     } else {
-      this.fuel = Math.min(this.maxFuel, this.fuel + (this.hasHyperJetpack ? 16.0 : 9.0) * dt);
-      // Gentle air braking / gliding resistance when releasing jetpack in flight
-      if (!this.isGrounded && this.velocity.y < 0) {
-        this.velocity.y *= (this.hasHyperJetpack ? 0.98 : 0.99); // Prevents sudden uncontrolled plummeting
-      }
+      // Generous fast fuel recharge (45/s on ground, 16/s mid-air)
+      const rechargeRate = this.isGrounded ? (this.hasHyperJetpack ? 56.0 : 45.0) : (this.hasHyperJetpack ? 22.0 : 16.0);
+      this.fuel = Math.min(this.maxFuel, this.fuel + rechargeRate * dt);
     }
 
     if (ceilingBlocked || isActuallyCrouching) {
-      // Crucial: When crouched under platform, lock vertical velocity <= 0 and force grounded!
+      // Prevent jumping/jetpacking upward into a low ceiling, while STILL applying full gravity
+      // so walking off a box/ledge while crouched under a platform drops Jones immediately (ZERO mid-air hovering!)
       this.velocity.y = Math.min(0, this.velocity.y);
-      this.isGrounded = true;
-    } else {
       this.velocity.y += gravity * dt;
-      this.velocity.y = THREE.MathUtils.clamp(this.velocity.y, -12.5, maxClampedVy);
+      this.velocity.y = Math.max(this.velocity.y, -19.5);
+    } else if (isHoverHanging) {
+      // Smoothly hold altitude during the 1.0s post-release hover-hang before realistic falling begins!
+      this.velocity.y = THREE.MathUtils.lerp(this.velocity.y, 0, Math.min(1, dt * 12.0));
+    } else if (!isActuallyJetpacking) {
+      this.velocity.y += gravity * dt;
+      this.velocity.y = THREE.MathUtils.clamp(this.velocity.y, -19.5, maxClampedVy);
     }
 
-    const playerHeight = isActuallyCrouching ? 1.10 : 1.85;
+    const playerHeight = isLowProfile ? 1.05 : 1.85;
 
     // 1. Ball Mode Physics & Dynamic Dimensions
     const ballRadius = 1.25;
@@ -2204,16 +2501,25 @@ export class Player {
     if (!this.wasGroundedLastFrame && this.isGrounded) {
       const impactForce = THREE.MathUtils.clamp(-prevVy / 13.0, 0.25, 1.0);
       this.landingSuspension = impactForce;
+      this.jumpsRemaining = this.maxJumps;
       this.emitDust(this.position.x, this.position.y, Math.floor(4 + impactForce * 6));
+      this.mixamoRig?.triggerLand(impactForce, this.usedJetpackThisAir);
+      this.usedJetpackThisAir = false;
+      this.onLand?.(impactForce);
+      if (impactForce > 0.45) {
+        this.onHaptic?.(55, impactForce * 0.30, impactForce * 0.22);
+      }
     }
     this.prevVelocityY = this.velocity.y;
     this.wasGroundedLastFrame = this.isGrounded;
 
         // 6. State Machine
-    if (isActuallyJetpacking) {
+    if (isActuallyJetpacking || isHoverHanging) {
       this.state = PlayerState.JETPACK;
     } else if (!this.isGrounded) {
       this.state = this.velocity.y > 0 ? PlayerState.JUMP : PlayerState.FALL;
+    } else if (isSliding) {
+      this.state = PlayerState.SLIDE;
     } else if (isActuallyCrouching) {
       this.state = Math.abs(this.velocity.x) > 0.2 ? PlayerState.CROUCH_WALK : PlayerState.CROUCH;
     } else if (Math.abs(this.velocity.x) > 0.4) {
@@ -2229,8 +2535,8 @@ export class Player {
     this.updateForcefieldSystem(dt, isActuallyCrouching);
 
     // Update Dynamic Contact Shadow Decal
+    let surfaceY = GROUND_Y;
     if (this.shadowMesh) {
-      let surfaceY = GROUND_Y;
       for (const plat of platforms) {
         const platTop = plat.y + plat.height / 2;
         const platLeft = plat.x - plat.width / 2;
@@ -2252,10 +2558,59 @@ export class Player {
       this.shadowMesh.scale.set(s, s, s);
       (this.shadowMesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0.12, 0.45 - heightAbove * 0.04);
     }
-    this.animateSkeletalRig(dt, hasMouseTarget);
-    this.updateJetpackVFX(dt, isActuallyJetpacking);
-    this.updateHelmetLEDs(dt);
-    this.updateBeltLEDs(dt);
+    // Skip legacy hidden procedural rig updates once Mixamo Jones is loaded (saves CPU every frame!)
+    if (!this.mixamoRig?.isLoaded) {
+      this.animateSkeletalRig(dt, hasMouseTarget);
+    }
+    const heightAboveGround = Math.max(0, this.position.y - surfaceY);
+    const activeAimAngle = hasMouseTarget ? this.currentAimAngle : (this.facingRight ? 0 : Math.PI);
+    this.mixamoRig?.update(
+      dt,
+      this.state,
+      this.velocity.x,
+      this.velocity.y,
+      this.isGrounded,
+      isActuallyCrouching,
+      activeThrottle,
+      heightAboveGround,
+      this.usedJetpackThisAir,
+      activeAimAngle,
+      isManualGamepadAim,
+      isHoverHanging
+    );
+
+    // Next-Gen GPU Jetpack Particles emitting directly from the 1979 Chrome Jetpack Nozzles!
+    if (this.mixamoRig?.isLoaded) {
+      this.mesh.updateMatrixWorld(true);
+      this.mixamoRig.getNozzleWorldPositions(this.nozzleWorldL, this.nozzleWorldR, this.position);
+      this.jetpackVfx.update(
+        dt,
+        activeThrottle,
+        this.nozzleWorldL,
+        this.nozzleWorldR,
+        this.velocity.x,
+        this.velocity.y,
+        surfaceY,
+        this.hasHyperJetpack,
+        isHoverHanging
+      );
+      // Warm-cyan dynamic thruster wash on ground & platforms below (shifts to warm gold during 1s hover-hang!)
+      this.thrusterLight.color.setHex(isHoverHanging ? 0xff9933 : 0x00bbff);
+      this.thrusterLight.position.set(
+        (this.nozzleWorldL.x + this.nozzleWorldR.x) * 0.5,
+        (this.nozzleWorldL.y + this.nozzleWorldR.y) * 0.5 - 0.35,
+        0.5
+      );
+      this.thrusterLight.intensity = (isActuallyJetpacking || isHoverHanging)
+        ? (isHoverHanging ? 2.4 : (2.6 + activeThrottle * 3.8 + Math.random() * 0.8))
+        : THREE.MathUtils.lerp(this.thrusterLight.intensity, 0, Math.min(1, dt * 16));
+    } else {
+      this.updateJetpackVFX(dt, isActuallyJetpacking);
+    }
+    if (!this.mixamoRig?.isLoaded) {
+      this.updateHelmetLEDs(dt);
+      this.updateBeltLEDs(dt);
+    }
     this.updateBubbleBurstVFX(dt);
     this.updateParticles(dt);
     this.updateLasers(dt);
@@ -2264,7 +2619,10 @@ export class Player {
   }
 
   /**
-   * Universal Forcefield & Ball Mode Transform & Shader Animation Update
+   * Adaptive Forcefield Bubble System:
+   * - NEVER displaces Jones's position, feet, or Mixamo animations!
+   * - Smoothly morphs its center, tilt, and 3D ellipsoid envelope to hug Jones's exact live posture:
+   *   Idle, Walk, Run, Jump, Fall, Jetpack Fly, Crouch/Crouch-Walk, and Running Slide!
    */
   private updateForcefieldSystem(dt: number, isActuallyCrouching: boolean) {
     if (!this.shieldGroup) return;
@@ -2272,30 +2630,99 @@ export class Player {
     if (!this.shieldActive) return;
 
     const isBall = this.isBallMode && !this.isDying;
-    const shieldCenterY = this.position.y + (isBall ? 1.25 : (isActuallyCrouching ? 0.70 : 1.05));
-    this.shieldGroup.position.set(this.position.x, shieldCenterY, this.position.z);
-
+    const dirSign = this.facingRight ? 1 : -1;
     const time = this.animTimer;
 
-    if (this.shieldWobbleTimer > 0) {
-      this.shieldWobbleTimer -= dt;
-      this.shieldMat.emissive.setHex(0x55ffff);
-      this.shieldMat.opacity = isBall ? 0.24 : 0.28;
-      this.shieldGridMat.opacity = isBall ? 0.30 : 0.35;
-    } else {
-      this.shieldMat.emissive.setHex(isBall ? 0x002233 : 0x001525);
-      this.shieldMat.opacity = isBall ? 0.10 : 0.14; // Crystal clear transparent bubble
-      this.shieldGridMat.opacity = isBall ? 0.15 : 0.18;
+    // 1. Compute animation-adaptive target center, scale envelope & aero tilt
+    let targetOffX = 0;
+    let targetCenterY = 1.02;
+    let targetSX = 0.80;
+    let targetSY = 0.88;
+    let targetSZ = 0.80;
+    let targetTiltZ = 0;
+
+    if (this.state === PlayerState.SLIDE) {
+      // Sleek low-profile horizontal aero-bubble hugging Jones's baseball slide!
+      targetOffX = dirSign * 0.14;
+      targetCenterY = 0.56;
+      targetSX = 1.14;
+      targetSY = 0.52;
+      targetSZ = 0.74;
+      targetTiltZ = -dirSign * 0.08;
+    } else if (isActuallyCrouching || this.state === PlayerState.CROUCH || this.state === PlayerState.CROUCH_WALK) {
+      // Compact crouched energy dome
+      targetOffX = dirSign * 0.05;
+      targetCenterY = 0.72;
+      targetSX = 0.82;
+      targetSY = 0.66;
+      targetSZ = 0.80;
+      targetTiltZ = -dirSign * 0.05;
+    } else if (this.state === PlayerState.JETPACK) {
+      // Aerodynamic jetpack flight bubble banking with Jones & his 1979 chrome jetpack
+      const speedTilt = THREE.MathUtils.clamp(Math.abs(this.velocity.x) * 0.022, 0, 0.20);
+      targetOffX = -dirSign * 0.06;
+      targetCenterY = 1.06;
+      targetSX = 0.88;
+      targetSY = 0.92;
+      targetSZ = 0.84;
+      targetTiltZ = -dirSign * (0.10 + speedTilt);
+    } else if (this.state === PlayerState.RUN) {
+      // Forward-leaning sprint bubble
+      targetOffX = dirSign * 0.06;
+      targetCenterY = 1.00;
+      targetSX = 0.86;
+      targetSY = 0.88;
+      targetSZ = 0.80;
+      targetTiltZ = -dirSign * 0.10;
+    } else if (!this.isGrounded) {
+      // Athletic jump / fall envelope
+      targetCenterY = 1.05;
+      targetSX = 0.82;
+      targetSY = 0.92;
+      targetSZ = 0.80;
+      targetTiltZ = THREE.MathUtils.clamp(-this.velocity.y * 0.012 * dirSign, -0.12, 0.12);
     }
 
-    // Dynamic Squash and Stretch Bouncy Ball scaling
+    // Subtle harmonic energy breathe + deflection impact wobble
+    const breathe = 1.0 + Math.sin(time * 5.2) * 0.018;
+    let wobbleX = 1.0;
+    let wobbleY = 1.0;
+    if (this.shieldWobbleTimer > 0) {
+      this.shieldWobbleTimer = Math.max(0, this.shieldWobbleTimer - dt);
+      const w = Math.sin(this.shieldWobbleTimer * 48.0) * (this.shieldWobbleTimer / 0.22) * 0.10;
+      wobbleX = 1.0 + w;
+      wobbleY = 1.0 - w;
+      this.shieldMat.emissive.setHex(0x55ffff);
+      this.shieldMat.opacity = 0.26;
+      this.shieldGridMat.opacity = 0.34;
+    } else {
+      this.shieldMat.emissive.setHex(isBall ? 0x002233 : 0x001525);
+      this.shieldMat.opacity = 0.13; // Crystal clear transparent iridescent bubble
+      this.shieldGridMat.opacity = 0.18;
+    }
+
+    // Smoothly track Jones's live position & morph bubble shape to match his current animation!
+    const followRate = Math.min(1, dt * 16.0);
+    const goalX = this.position.x + targetOffX;
+    const goalY = this.position.y + targetCenterY;
+    this.shieldGroup.position.set(
+      THREE.MathUtils.lerp(this.shieldGroup.position.x, goalX, Math.min(1, dt * 28.0)),
+      THREE.MathUtils.lerp(this.shieldGroup.position.y, goalY, followRate),
+      this.position.z
+    );
+    this.shieldGroup.rotation.z = THREE.MathUtils.lerp(this.shieldGroup.rotation.z, targetTiltZ, followRate);
+
     if (isBall) {
       this.ballBounceSquash = THREE.MathUtils.lerp(this.ballBounceSquash, 1.0, dt * 8.0);
       const sqY = this.ballBounceSquash;
       const stX = 1.0 / Math.sqrt(Math.max(0.2, sqY));
-      this.shieldGroup.scale.set(stX * 0.76, sqY * 0.76, stX * 0.76); // Bouncy sphere of 1.25m radius
+      this.shieldGroup.scale.set(
+        THREE.MathUtils.lerp(this.shieldGroup.scale.x, targetSX * stX * breathe * wobbleX, followRate),
+        THREE.MathUtils.lerp(this.shieldGroup.scale.y, targetSY * sqY * breathe * wobbleY, followRate),
+        THREE.MathUtils.lerp(this.shieldGroup.scale.z, targetSZ * stX * breathe, followRate)
+      );
 
-      // Physical 3D ball rotation when rolling and bouncing off surfaces
+      // Outer energy shell rolls visually with horizontal speed while Jones animates freely inside!
       const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
       if (this.isGrounded) {
         const rollRate = (-horizSpeed / 1.25);
@@ -2307,13 +2734,16 @@ export class Player {
       this.ballRotationX += Math.abs(this.ballAngularVelocity) * 0.35 * dt;
       this.ballRotationY += this.ballAngularVelocity * 0.25 * dt;
 
-      // Apply 3D sphere tumble and spin
       this.shieldSphereMesh.rotation.set(this.ballRotationX, this.ballRotationY, this.ballRotationZ);
       this.shieldGridMesh.rotation.set(this.ballRotationX * 0.8, this.ballRotationY * 0.8, this.ballRotationZ);
       this.shieldRingMesh1.rotation.set(this.ballRotationX * 1.2, this.ballRotationY * 1.2, this.ballRotationZ * 1.2);
       this.shieldRingMesh2.rotation.set(-this.ballRotationX * 0.9, -this.ballRotationY * 0.9, -this.ballRotationZ * 0.9);
     } else {
-      this.shieldGroup.scale.set(1.0, 1.0, 1.0);
+      this.shieldGroup.scale.set(
+        THREE.MathUtils.lerp(this.shieldGroup.scale.x, targetSX * breathe * wobbleX, followRate),
+        THREE.MathUtils.lerp(this.shieldGroup.scale.y, targetSY * breathe * wobbleY, followRate),
+        THREE.MathUtils.lerp(this.shieldGroup.scale.z, targetSZ * breathe, followRate)
+      );
       this.shieldSphereMesh.rotation.set(0, 0, 0);
     }
 
@@ -2368,6 +2798,78 @@ export class Player {
       if (Math.random() < 0.20) {
         this.emitSmoke(this.position.x - 0.15, this.position.y + 0.85, 0, 1);
       }
+    }
+
+    // Dedicated Mixamo Death Path (plays Standing React Death Backward cleanly without 2D ragdoll tilt!)
+    if (this.mixamoRig?.isLoaded) {
+      if (!this.deathHasLanded) {
+        this.velocity.y -= 22.0 * dt;
+        this.velocity.x *= 0.94;
+        this.position.x += this.velocity.x * dt;
+        this.position.y += this.velocity.y * dt;
+
+        let highestSurfaceBelow = GROUND_Y;
+        const pLeft = this.position.x - 0.32;
+        const pRight = this.position.x + 0.32;
+        for (const plat of platforms) {
+          const platTop = plat.y + plat.height / 2;
+          const platLeft = plat.x - plat.width / 2;
+          const platRight = plat.x + plat.width / 2;
+          if (pRight > platLeft && pLeft < platRight) {
+            if (platTop <= this.position.y + 0.45 && platTop > highestSurfaceBelow) {
+              highestSurfaceBelow = platTop;
+            }
+          }
+        }
+        if (this.position.y <= highestSurfaceBelow + 0.08 && this.velocity.y <= 0) {
+          this.deathHasLanded = true;
+          this.deathLandingSurfaceY = highestSurfaceBelow;
+          this.position.y = highestSurfaceBelow;
+          this.velocity.set(0, 0, 0);
+          this.isGrounded = true;
+          this.emitDust(this.position.x, highestSurfaceBelow, 12);
+          this.onLand?.(0.85);
+        }
+      } else {
+        this.position.y = this.deathLandingSurfaceY;
+        this.velocity.x *= 0.88;
+        this.position.x += this.velocity.x * dt;
+        this.groundedDeathTimer += dt;
+        if (this.groundedDeathTimer >= 2.0 || this.deathTimer >= 3.2) {
+          this.isDead = true;
+        }
+      }
+
+      this.rigRoot.rotation.z = 0;
+      this.rigRoot.position.set(0, 0, 0);
+      this.mesh.position.copy(this.position);
+      this.mixamoRig.updateDeath(dt);
+      this.mesh.updateMatrixWorld(true);
+      this.mixamoRig.getNozzleWorldPositions(this.nozzleWorldL, this.nozzleWorldR, this.position);
+      // Sputtering short-circuit jetpack sparks + billowing white smoke during the first 1.15s of collapse!
+      const isSputtering = this.deathTimer < 1.15;
+      if (isSputtering && Math.random() < dt * 14.0) {
+        this.emitSparks(
+          (this.nozzleWorldL.x + this.nozzleWorldR.x) * 0.5,
+          (this.nozzleWorldL.y + this.nozzleWorldR.y) * 0.5,
+          (Math.random() - 0.5) * 4.5,
+          3
+        );
+      }
+      this.jetpackVfx.update(
+        dt,
+        0,
+        this.nozzleWorldL,
+        this.nozzleWorldR,
+        this.velocity.x,
+        this.velocity.y,
+        this.deathLandingSurfaceY,
+        this.hasHyperJetpack,
+        isSputtering && this.deathTimer < 0.72
+      );
+      this.updateDroppedGun(dt, platforms);
+      this.updateParticles(dt);
+      return;
     }
 
     const H = 0.95; // Waist / Center of mass height above feet
@@ -2641,7 +3143,7 @@ export class Player {
         // Trigger footstep sound on creeping steps
         if (this.isGrounded) {
           if (Math.sin(phase) * Math.sin(this.prevStridePhase) <= 0 && phase !== this.prevStridePhase) {
-            this.onFootstep?.();
+            this.onFootstep?.('crouch');
           }
         }
         this.prevStridePhase = phase;
@@ -2686,7 +3188,7 @@ export class Player {
         // Trigger footstep sound on foot contact
         if (this.isGrounded) {
           if (Math.sin(phase) * Math.sin(this.prevStridePhase) <= 0 && phase !== this.prevStridePhase) {
-            this.onFootstep?.();
+            this.onFootstep?.('walk');
           }
         }
         this.prevStridePhase = phase;
@@ -2735,7 +3237,7 @@ export class Player {
         // Trigger footstep sound on foot contact
         if (this.isGrounded) {
           if (Math.sin(phase) * Math.sin(this.prevStridePhase) <= 0 && phase !== this.prevStridePhase) {
-            this.onFootstep?.();
+            this.onFootstep?.('run');
           }
         }
         this.prevStridePhase = phase;

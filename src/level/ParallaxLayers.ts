@@ -73,6 +73,8 @@ export class ParallaxLayers {
   private midCubeModules: ParallaxObject[] = [];
   private floorTiles: THREE.Group[] = [];
   private foregroundConsoles: THREE.Group[] = [];
+  private foreground1979Props: { group: THREE.Group; baseX: number }[] = [];
+  private crtScreenMats: THREE.ShaderMaterial[] = [];
   private droneCitySignTex!: THREE.CanvasTexture;
   private dofVeilPlane!: THREE.Mesh;
 
@@ -97,14 +99,9 @@ export class ParallaxLayers {
     scene.add(this.group);
 
     this.initAestheticMaterials();
-    this.createSunsetSky();
-    this.createAtmosphericClouds();
-    this.createCelestialRingedPlanet();
-    this.createSatelliteMoons();
-    this.createRoundedCubeBackground();
+    // All background elements removed so the nowhere_road_2k HDRI shines cleanly across the entire background!
     this.createSeamlessCatwalkBridge();
     this.createForegroundTerminalConsoles();
-    this.createFakeDOFVeil();
   }
 
   private initAestheticMaterials() {
@@ -144,35 +141,35 @@ export class ParallaxLayers {
       metalness: 0.70,
     });
 
-    // Pure White, Light Silver, and Crisp Clean High-Tech Whites for Background Cubes
+    // 1979 Retro-Space Palette: Electric Lime Green, Sunset Orange, Flamingo Pink & Warm Espresso/Saddle Browns!
     this.bgPureWhiteMat = new THREE.MeshStandardMaterial({
-      color: 0xfcfdfd,
-      roughness: 0.28,
-      metalness: 0.15,
+      color: 0xa6ff38, // Electric 1979 Lime Green
+      roughness: 0.30,
+      metalness: 0.14,
     });
 
     this.bgLightGreyMat = new THREE.MeshStandardMaterial({
-      color: 0xf2f5f9,
-      roughness: 0.32,
-      metalness: 0.18,
+      color: 0xff7f2a, // Iconic 1979 Sunset Tangerine Orange
+      roughness: 0.34,
+      metalness: 0.16,
     });
 
     this.bgSoftSlateGreyMat = new THREE.MeshStandardMaterial({
-      color: 0xe8ecf2,
-      roughness: 0.35,
-      metalness: 0.20,
+      color: 0x8a5232, // Warm Terracotta / Cinnamon Brown
+      roughness: 0.44,
+      metalness: 0.14,
     });
 
     this.bgCoolSilverMat = new THREE.MeshStandardMaterial({
-      color: 0xdee3eb,
-      roughness: 0.38,
-      metalness: 0.22,
+      color: 0x5c3622, // Deep 1979 Saddle / Espresso Brown
+      roughness: 0.48,
+      metalness: 0.16,
     });
 
     this.bgMutedGreyMat = new THREE.MeshStandardMaterial({
-      color: 0xd4dae3,
-      roughness: 0.42,
-      metalness: 0.25,
+      color: 0xff6cb5, // Vibrant 1979 Flamingo Retro Pink
+      roughness: 0.32,
+      metalness: 0.14,
     });
 
     // Main walkway deck (cream with vibrant amber runner stripe)
@@ -437,90 +434,99 @@ export class ParallaxLayers {
    * High-key minimalist light greys and whites with zero dark/saturated clutter
    */
   private createRoundedCubeBackground() {
-    const moduleSpan = 40;
-    const count = 6;
+    const moduleSpan = 56;
+    const count = 4;
 
-    // Distant Layer (Parallax Factor 0.12, Z = -22)
+    // Distant Layer (Parallax Factor 0.12, Z = -22) — 1979 Retro-Space Brown Monoliths, Lime Stripes & Pink Domes!
+    const limeBandMat = new THREE.MeshBasicMaterial({ color: 0xb6ff3b });
+    const orangeBandMat = new THREE.MeshBasicMaterial({ color: 0xff8822 });
+    const pinkRingMat = new THREE.MeshBasicMaterial({ color: 0xff66b8 });
+
     for (let i = 0; i < count; i++) {
-      const baseX = (i - 2) * moduleSpan;
+      const baseX = (i - 1) * moduleSpan;
       const group = new THREE.Group();
       group.position.set(baseX, -3.7, -22);
 
-      // Distant tall monolith rounded cubes in light greys & whites
-      const geoMonolith = createRoundedBoxGeo(6.0, 18.0, 5.0, 0.8);
+      // Deep Espresso-Brown 1979 Space Monolith with Electric Lime & Orange racing collars
+      const geoMonolith = createRoundedBoxGeo(6.0, 17.5, 5.0, 0.85);
       const meshMonolith1 = new THREE.Mesh(geoMonolith, this.bgCoolSilverMat);
-      meshMonolith1.position.set(-14, 9.0, 0);
-      meshMonolith1.receiveShadow = true;
+      meshMonolith1.position.set(-14, 8.75, 0);
       group.add(meshMonolith1);
 
-      const meshMonolith2 = new THREE.Mesh(geoMonolith, this.bgLightGreyMat);
-      meshMonolith2.position.set(16, 11.0, -2);
-      meshMonolith2.receiveShadow = true;
-      group.add(meshMonolith2);
+      const limeCollar = new THREE.Mesh(new THREE.BoxGeometry(6.25, 0.55, 5.25), limeBandMat);
+      limeCollar.position.set(-14, 13.8, 0);
+      group.add(limeCollar);
 
-      // Stacked background cubes
-      const geoBlockLg = createRoundedBoxGeo(7.5, 9.0, 5.0, 0.9);
+      const orangeCollar = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.38, 5.2), orangeBandMat);
+      orangeCollar.position.set(-14, 12.9, 0);
+      group.add(orangeCollar);
+
+      // Warm Cinnamon-Brown Retro-Space Habitat Base topped with a 1979 Flamingo Pink Geodesic Dome!
+      const geoBlockLg = createRoundedBoxGeo(8.2, 7.2, 5.0, 0.9);
       const meshBlockLg = new THREE.Mesh(geoBlockLg, this.bgSoftSlateGreyMat);
-      meshBlockLg.position.set(0, 4.5, -4);
-      meshBlockLg.receiveShadow = true;
+      meshBlockLg.position.set(10, 3.6, -4);
       group.add(meshBlockLg);
 
-      const geoTopCube = createRoundedBoxGeo(4.0, 4.0, 4.0, 0.6);
-      const meshTopCube = new THREE.Mesh(geoTopCube, this.bgPureWhiteMat);
-      meshTopCube.position.set(0, 11.0, -3.5);
-      meshTopCube.receiveShadow = true;
-      group.add(meshTopCube);
+      const pinkDome = new THREE.Mesh(
+        new THREE.SphereGeometry(3.6, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
+        this.bgMutedGreyMat
+      );
+      pinkDome.position.set(10, 7.0, -4);
+      group.add(pinkDome);
+
+      const domeRing = new THREE.Mesh(new THREE.TorusGeometry(3.75, 0.16, 8, 24), limeBandMat);
+      domeRing.rotation.x = Math.PI / 2;
+      domeRing.position.set(10, 7.15, -4);
+      group.add(domeRing);
 
       this.group.add(group);
       this.distantCubeModules.push({ group, baseX, baseY: -3.7, parallaxFactor: 0.12 });
     }
 
-    // Midground Layer (Parallax Factor 0.32, Z = -13)
+    // Midground Layer (Parallax Factor 0.32, Z = -13) — 1979 Sunset Orange, Lime Green, Pink & Warm Brown Architecture!
     for (let i = 0; i < count; i++) {
-      const baseX = (i - 2) * moduleSpan;
+      const baseX = (i - 1) * moduleSpan;
       const group = new THREE.Group();
       group.position.set(baseX, -3.7, -13);
 
-      // 1. Left Cluster: Stepped Pure White & Soft Grey Rounded Cubes
-      const geoMid1 = createRoundedBoxGeo(4.2, 8.5, 3.8, 0.6);
+      // 1. Sunset Tangerine Space-Pod Block with Lime Green Crown Ring
+      const geoMid1 = createRoundedBoxGeo(4.4, 7.2, 3.8, 0.65);
       const m1 = new THREE.Mesh(geoMid1, this.bgLightGreyMat);
-      m1.position.set(-11, 4.25, 0);
-      m1.receiveShadow = true;
+      m1.position.set(-11, 3.6, 0);
       group.add(m1);
 
-      const geoOrangeCube = createRoundedBoxGeo(3.0, 3.0, 3.0, 0.5);
-      const mWhiteCube = new THREE.Mesh(geoOrangeCube, this.bgPureWhiteMat);
-      mWhiteCube.position.set(-11, 10.0, 0.2);
-      mWhiteCube.receiveShadow = true;
-      group.add(mWhiteCube);
+      const podCrown = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.15, 8, 22), limeBandMat);
+      podCrown.rotation.x = Math.PI / 2;
+      podCrown.position.set(-11, 7.35, 0);
+      group.add(podCrown);
 
-      // 2. Center Floating Modern Cube
-      const geoFloat = createRoundedBoxGeo(3.8, 3.8, 3.8, 0.65);
+      // 2. Floating Electric-Lime Retro Space Cube over Flamingo-Pink Pillar
+      const geoFloat = createRoundedBoxGeo(3.4, 3.4, 3.4, 0.65);
       const mFloat = new THREE.Mesh(geoFloat, this.bgPureWhiteMat);
-      mFloat.position.set(3.5, 7.5, -1);
-      mFloat.rotation.set(0.1, 0.15, 0.05);
-      mFloat.receiveShadow = true;
+      mFloat.position.set(3.5, 7.6, -1);
+      mFloat.rotation.set(0.08, 0.18, 0.04);
       group.add(mFloat);
 
-      // Pillar base below floating cube
-      const geoPillar = createRoundedBoxGeo(2.6, 5.0, 2.6, 0.4);
+      const geoPillar = createRoundedBoxGeo(2.4, 4.8, 2.4, 0.4);
       const mPillar = new THREE.Mesh(geoPillar, this.bgMutedGreyMat);
-      mPillar.position.set(3.5, 2.5, -1);
-      mPillar.receiveShadow = true;
+      mPillar.position.set(3.5, 2.4, -1);
       group.add(mPillar);
 
-      // 3. Right Cluster: Architectural Rounded Blocks
-      const geoTowerBlock = createRoundedBoxGeo(4.5, 11.5, 4.0, 0.7);
+      // 3. Warm Brown 1979 Space Tower with Sunset Orange Cap & Pink Halo Ring
+      const geoTowerBlock = createRoundedBoxGeo(4.6, 11.2, 4.0, 0.7);
       const mTower = new THREE.Mesh(geoTowerBlock, this.bgSoftSlateGreyMat);
-      mTower.position.set(15, 5.75, 0);
-      mTower.receiveShadow = true;
+      mTower.position.set(15, 5.6, 0);
       group.add(mTower);
 
-      const geoCapCube = createRoundedBoxGeo(3.2, 2.2, 3.2, 0.45);
-      const mCap = new THREE.Mesh(geoCapCube, this.bgPureWhiteMat);
-      mCap.position.set(15, 12.6, 0);
-      mCap.receiveShadow = true;
+      const geoCapCube = createRoundedBoxGeo(3.4, 2.0, 3.4, 0.45);
+      const mCap = new THREE.Mesh(geoCapCube, this.bgLightGreyMat);
+      mCap.position.set(15, 12.2, 0);
       group.add(mCap);
+
+      const towerRing = new THREE.Mesh(new THREE.TorusGeometry(2.8, 0.14, 8, 24), pinkRingMat);
+      towerRing.rotation.x = Math.PI / 2;
+      towerRing.position.set(15, 9.6, 0);
+      group.add(towerRing);
 
       // Illuminated Billboard: "WELCOME TO DRONE CITY"
       if (!this.droneCitySignTex) {
@@ -529,39 +535,21 @@ export class ParallaxLayers {
       const signGeo = new THREE.BoxGeometry(7.2, 2.2, 0.25);
       const signMat = new THREE.MeshStandardMaterial({
         map: this.droneCitySignTex,
-        emissive: 0x0088cc,
-        emissiveIntensity: 0.85,
+        emissive: 0xff7722,
+        emissiveIntensity: 0.75,
         roughness: 0.3,
         metalness: 0.2,
       });
       const signMesh = new THREE.Mesh(signGeo, signMat);
-      signMesh.position.set(15, 15.0, 0);
+      signMesh.position.set(15, 14.8, 0);
       group.add(signMesh);
-
-      // Eye-level Drone City illuminated sign plaque mounted on midground block
-      const eyeSignGeo = new THREE.BoxGeometry(6.4, 2.0, 0.2);
-      const eyeSignMesh = new THREE.Mesh(eyeSignGeo, signMat);
-      eyeSignMesh.position.set(-11, 6.5, 2.0);
-      group.add(eyeSignMesh);
 
       // Support truss struts holding the Drone City sign
       for (const lx of [12.6, 17.4]) {
         const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.6, 8), this.steelPipeMat);
-        leg.position.set(lx, 13.7, 0);
+        leg.position.set(lx, 13.5, 0);
         group.add(leg);
       }
-
-      // Floating Accent Cubes
-      const geoAccent1 = createRoundedBoxGeo(1.8, 1.8, 1.8, 0.35);
-      const mAccent1 = new THREE.Mesh(geoAccent1, this.bgPureWhiteMat);
-      mAccent1.position.set(-4.5, 5.0, 1.0);
-      mAccent1.rotation.y = 0.2;
-      group.add(mAccent1);
-
-      const mAccent2 = new THREE.Mesh(geoAccent1, this.bgCoolSilverMat);
-      mAccent2.position.set(9.5, 4.2, 0.5);
-      mAccent2.rotation.y = -0.3;
-      group.add(mAccent2);
 
       this.group.add(group);
       this.midCubeModules.push({ group, baseX, baseY: -3.7, parallaxFactor: 0.32 });
@@ -732,15 +720,13 @@ export class ParallaxLayers {
    * 6. Foreground Vintage CRT Computer Terminal Consoles
    */
   private createForegroundTerminalConsoles() {
-    const spacing = 36;
-    const count = 6;
+    // Spaced cleanly so NO computer ever blocks Jones at start (x = 0) and seated low along bottom foreground!
+    const positions = [24, 88, 152];
 
-    for (let i = 0; i < count; i++) {
-      // Offset consoles so none spawn anywhere near start position X=0
-      const baseX = (i - 2) * spacing + 18;
-      if (Math.abs(baseX) < 12) continue; // Guaranteed clear start view for the player!
+    for (let i = 0; i < positions.length; i++) {
+      const baseX = positions[i];
       const consoleGroup = new THREE.Group();
-      consoleGroup.position.set(baseX, -3.70, 2.2);
+      consoleGroup.position.set(baseX, -4.15, 2.5);
 
       // Angled Beige/Cream Console Chassis
       const chassisGeo = new THREE.BoxGeometry(1.6, 1.2, 0.9);
@@ -811,10 +797,81 @@ export class ParallaxLayers {
       shape.quadraticCurveTo(-sw/2, -sh/2, -sw/2 + sr, -sh/2);
 
       const screenGeo = new THREE.ShapeGeometry(shape);
-      const screenMat = new THREE.MeshBasicMaterial({
-        map: screenTex,
-        color: 0x00c8ff,
+      // Normalize UVs on ShapeGeometry to exact 0..1 across the screen surface
+      const posAttr = screenGeo.attributes.position;
+      const uvAttr = screenGeo.attributes.uv;
+      for (let v = 0; v < posAttr.count; v++) {
+        uvAttr.setXY(
+          v,
+          (posAttr.getX(v) + sw * 0.5) / sw,
+          (posAttr.getY(v) + sh * 0.5) / sh
+        );
+      }
+      uvAttr.needsUpdate = true;
+
+      // Next-Gen 100% GPU Micro-Animated Electric-Blue CRT Telemetry Shader (0 CPU redraws!)
+      const screenMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uBaseTex: { value: screenTex },
+          uTime: { value: 0 },
+          uSeed: { value: i * 1.73 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          precision mediump float;
+          uniform sampler2D uBaseTex;
+          uniform float uTime;
+          uniform float uSeed;
+          varying vec2 vUv;
+
+          void main() {
+            float t = uTime + uSeed;
+            vec3 base = texture2D(uBaseTex, vUv).rgb * vec3(0.35, 0.72, 1.0);
+
+            // 1. Live Oscillating Dual-Harmonic Telemetry Waveform across center of screen
+            float waveY = 0.52 + 0.14 * sin(vUv.x * 16.0 - t * 5.2) * cos(vUv.x * 5.0 + t * 1.9);
+            float waveGlow = exp(-abs(vUv.y - waveY) * 38.0);
+            float wave2Y = 0.52 + 0.08 * sin(vUv.x * 24.0 + t * 7.5);
+            float wave2Glow = exp(-abs(vUv.y - wave2Y) * 48.0) * 0.55;
+
+            // 2. Rotating Mini Orbital Radar Sweep in upper-right corner
+            vec2 rCenter = vec2(0.80, 0.74);
+            vec2 rp = (vUv - rCenter) * vec2(1.4, 1.0);
+            float rDist = length(rp);
+            float rRing = smoothstep(0.015, 0.0, abs(rDist - 0.14)) + smoothstep(0.012, 0.0, abs(rDist - 0.07)) * 0.5;
+            float rAng = atan(rp.y, rp.x);
+            float sweep = fract((rAng / 6.2831853) - t * 0.65);
+            float rBeam = smoothstep(0.28, 0.0, sweep) * step(rDist, 0.145) * 0.85;
+
+            // 3. Animated Pulsing Spectrum Data Bars along bottom-left
+            float barCol = floor(vUv.x * 14.0);
+            float inBarZone = step(0.08, vUv.x) * step(vUv.x, 0.62) * step(0.10, vUv.y) * step(vUv.y, 0.28);
+            float barH = 0.12 + 0.14 * (0.5 + 0.5 * sin(t * 4.5 + barCol * 1.37));
+            float barCell = step(0.22, fract(vUv.x * 14.0)) * step(vUv.y, barH) * inBarZone;
+
+            // 4. Blinking Status LED Blip + Rolling Phosphor Scanline Beam
+            float statusDist = length((vUv - vec2(0.12, 0.84)) * vec2(1.4, 1.0));
+            float statusBlip = smoothstep(0.032, 0.01, statusDist) * (0.45 + 0.55 * sin(t * 6.0));
+            float rollScan = exp(-abs(fract(vUv.y + t * 0.28) - 0.5) * 18.0) * 0.18;
+            float crtLines = 0.90 + 0.10 * sin(vUv.y * 120.0);
+
+            vec3 cyan = vec3(0.08, 0.94, 1.0);
+            vec3 bright = vec3(0.75, 0.98, 1.0);
+            vec3 col = base
+              + cyan * (waveGlow * 0.95 + wave2Glow * 0.6 + rRing * 0.7 + rBeam + barCell * 0.75 + rollScan)
+              + bright * (waveGlow * 0.45 + statusBlip * 1.1);
+
+            gl_FragColor = vec4(col * crtLines, 1.0);
+          }
+        `
       });
+      this.crtScreenMats.push(screenMat);
       const screen = new THREE.Mesh(screenGeo, screenMat);
       screen.position.set(-0.15, 1.28, 0.32);
       screen.rotation.x = -0.15;
@@ -850,26 +907,86 @@ export class ParallaxLayers {
       this.group.add(consoleGroup);
       this.foregroundConsoles.push(consoleGroup);
     }
+
+    // 1979 Retro-Space Foreground Parallax Silhouettes (faster 1.18x parallax along bottom edge — never blocks player!)
+    const chromeMat = new THREE.MeshStandardMaterial({ color: 0xd8e4f0, metalness: 0.9, roughness: 0.16 });
+    const retroOrangeMat = new THREE.MeshStandardMaterial({ color: 0xe85522, metalness: 0.25, roughness: 0.35 });
+    const darkPipeMat = new THREE.MeshStandardMaterial({ color: 0x1e2532, metalness: 0.65, roughness: 0.42 });
+    const beaconCyanMat = new THREE.MeshBasicMaterial({ color: 0x00f5ff });
+    const beaconAmberMat = new THREE.MeshBasicMaterial({ color: 0xffaa22 });
+
+    const propSlots = [16, 46, 78, 112];
+    for (let i = 0; i < propSlots.length; i++) {
+      const g = new THREE.Group();
+      const bx = propSlots[i];
+      g.position.set(bx, -4.55, 3.6);
+
+      if (i % 2 === 0) {
+        // 1979 Apollo-Era Chrome Telemetry Antenna Bollard
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.34, 0.55, 12), darkPipeMat);
+        base.position.y = 0.28;
+        g.add(base);
+
+        const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.12, 12), retroOrangeMat);
+        collar.position.y = 0.52;
+        g.add(collar);
+
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 1.05, 10), chromeMat);
+        mast.position.y = 1.05;
+        g.add(mast);
+
+        const dish = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.45), chromeMat);
+        dish.position.set(0.05, 1.48, 0);
+        dish.rotation.z = -0.65;
+        g.add(dish);
+
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), beaconCyanMat);
+        tip.position.set(0, 1.65, 0);
+        g.add(tip);
+      } else {
+        // 1979 Retro-Space Fuel Conduit Stanchion with Glowing Amber Marker
+        const pipeA = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 1.15, 12), darkPipeMat);
+        pipeA.position.set(-0.22, 0.58, 0);
+        g.add(pipeA);
+
+        const pipeB = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.10, 0.90, 10), chromeMat);
+        pipeB.position.set(0.18, 0.45, 0.12);
+        g.add(pipeB);
+
+        const band = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.18, 0.36), retroOrangeMat);
+        band.position.set(0, 0.85, 0);
+        g.add(band);
+
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 10), beaconAmberMat);
+        lamp.position.set(0, 1.05, 0);
+        g.add(lamp);
+      }
+
+      this.group.add(g);
+      this.foreground1979Props.push({ group: g, baseX: bx });
+    }
   }
 
   public update(playerX: number, playerY: number = GROUND_Y, time: number = 0) {
     const alt = Math.max(0, playerY - GROUND_Y);
 
-    // 1. Follow player with celestial backdrop & moons with vertical atmospheric scrolling
-        if (this.dofVeilPlane) {
+    // 1. Background layers removed (replaced by nowhere_road_2k HDRI!) — guard optional references cleanly
+    if (this.dofVeilPlane) {
       this.dofVeilPlane.position.x = playerX * 0.15;
       this.dofVeilPlane.position.y = 15 + alt * 0.28;
     }
-    this.skyBackdrop.position.x = playerX;
-    this.skyBackdrop.position.y = 75 + alt * 0.35; // As player ascends, sky scrolls smoothly through strata
-
-    this.ringedPlanetGroup.position.x = 24 + playerX * 0.025;
-    this.ringedPlanetGroup.position.y = 28 + alt * 0.22;
-
-    this.moonsGroup.position.x = playerX * 0.015;
-    this.moonsGroup.position.y = 18 + alt * 0.20;
-
-    // Drifting stratosphere clouds
+    if (this.skyBackdrop) {
+      this.skyBackdrop.position.x = playerX;
+      this.skyBackdrop.position.y = 75 + alt * 0.35;
+    }
+    if (this.ringedPlanetGroup) {
+      this.ringedPlanetGroup.position.x = 24 + playerX * 0.025;
+      this.ringedPlanetGroup.position.y = 28 + alt * 0.22;
+    }
+    if (this.moonsGroup) {
+      this.moonsGroup.position.x = playerX * 0.015;
+      this.moonsGroup.position.y = 18 + alt * 0.20;
+    }
     if (this.atmosphereClouds) {
       this.atmosphereClouds.position.x = playerX * 0.15 + ((time * 0.8) % 160) - 80;
       this.atmosphereClouds.position.y = 24 - alt * 0.15;
@@ -887,7 +1004,7 @@ export class ParallaxLayers {
     }
 
     // 3. Parallax Midground Rounded Cubes Leapfrogging (Factor 0.32)
-    const oSpan = 40;
+    const oSpan = 56;
     const oCount = this.midCubeModules.length;
     const oTotal = oSpan * oCount;
 
@@ -911,16 +1028,28 @@ export class ParallaxLayers {
       }
     }
 
-    // 5. Foreground Consoles Leapfrogging
-    const cSpan = 36;
+    // 5. Foreground Consoles Leapfrogging (guaranteed clear around start X=0!) + Live GPU Micro-Animated CRT Screens
+    const cSpan = 64;
     const cCount = this.foregroundConsoles.length;
     const cTotal = cSpan * cCount;
 
     for (let i = 0; i < cCount; i++) {
       const con = this.foregroundConsoles[i];
-      // Offset by +18 so consoles never hover in front of player start position at X=0
-      const relX = (((i - 2) * cSpan + 18 - playerX) % cTotal + cTotal) % cTotal - cTotal / 2;
+      const basePos = 24 + i * cSpan;
+      const relX = ((basePos - playerX + cTotal * 0.5) % cTotal + cTotal) % cTotal - cTotal * 0.5;
       con.position.x = playerX + relX;
+    }
+
+    // 6. 1979 Retro-Space Foreground Parallax Props (faster 1.18x cinematic foreground depth!)
+    const fgTotal = 128;
+    for (const p of this.foreground1979Props) {
+      const shifted = p.baseX - playerX * 1.18;
+      const relX = ((shifted + fgTotal * 0.5) % fgTotal + fgTotal) % fgTotal - fgTotal * 0.5;
+      p.group.position.x = playerX + relX;
+    }
+
+    for (const mat of this.crtScreenMats) {
+      mat.uniforms.uTime.value = time;
     }
   }
 }

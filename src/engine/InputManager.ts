@@ -8,13 +8,29 @@ export class InputManager {
   public moveZ: number = 0; // -1 = Forward / North, +1 = Back / South (Isometric Depth)
   public run: boolean = false;
   public jumpJustPressed: boolean = false;
+  public jumpHeld: boolean = false;
   public jetpack: boolean = false;
+  public jetpackThrottle: number = 0;       // 0.0 - 1.0 (true analog RT/LT on gamepad!)
+  public jetpackDirectTrigger: boolean = false; // True when dedicated RT/LT/RB jetpack trigger is pressed
+  public rightStickAimX: number = 0;
+  public rightStickAimY: number = 0;
+  public hasGamepadAim: boolean = false;
+  public isGamepadActive: boolean = false;
+  public leftStickAimY: number = 0;
+  private prevGamepadJump: boolean = false;
+  private prevGamepadShoot: boolean = false;
+  private prevGamepadShield: boolean = false;
+  private gamepadRapidFireCooldown: number = 0;
+  private lastRumbleMs: number = 0;
+  private touchJumpHeld: boolean = false;
   public shootJustPressed: boolean = false;
   public ragdollJustPressed: boolean = false;
   public handheldToggleJustPressed: boolean = false;
   public shieldJustPressed: boolean = false;
   public crouch: boolean = false;
   public touchCrouch: boolean = false;
+  // Strictly gated to GameState.PLAYING so menu/load clicks & keys NEVER buffer a shot!
+  public gameplayInputEnabled: boolean = false;
 
   // Mouse & 360° Aiming
   public mouseScreenX: number = window.innerWidth / 2;
@@ -56,8 +72,10 @@ export class InputManager {
       }
 
       if ((e.code === 'KeyJ' || e.code === 'KeyZ' || e.code === 'Enter') && !wasPressed) {
-        this.shootJustPressed = true;
-        this.triggerReticlePulse();
+        if (this.gameplayInputEnabled) {
+          this.shootJustPressed = true;
+          this.triggerReticlePulse();
+        }
       }
 
       if ((e.code === 'KeyH') && !wasPressed) {
@@ -83,27 +101,23 @@ export class InputManager {
   }
 
   private setupMouse() {
-    window.addEventListener('mousemove', (e) => {
-      this.hasMouse = true;
-      this.mouseScreenX = e.clientX;
-      this.mouseScreenY = e.clientY;
-
-      if (this.reticleEl) {
-        this.reticleEl.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0)`;
-        this.reticleEl.classList.add('active');
-      }
-    });
+    // Cursor aiming removed: 100% pure Raycast Auto-Lock system!
+    // Left-click still fires the Colt cleanly without moving any cursor reticle.
+    if (this.reticleEl) {
+      this.reticleEl.classList.remove('active');
+      this.reticleEl.style.display = 'none';
+    }
 
     window.addEventListener('mousedown', (e) => {
       if (e.button === 0) {
+        if (!this.gameplayInputEnabled) return;
+        // Ignore clicks on Menu / HUD buttons so clicking "PLAY GAME" never fires a shot on load!
+        const target = e.target as HTMLElement | null;
+        if (target && target.closest('button, input, select, label, #main-menu, #main-menu-overlay, #settings-modal, #controls-modal, #controls-zoom-modal, #pixel-controls-hud, #hangar-overlay, #overlay-screen, #gameover-overlay, #boot-preloader')) {
+          return;
+        }
+        this.isGamepadActive = false;
         this.shootJustPressed = true;
-        this.triggerReticlePulse();
-      }
-    });
-
-    window.addEventListener('mouseleave', () => {
-      if (this.reticleEl) {
-        this.reticleEl.classList.remove('active');
       }
     });
   }
@@ -135,7 +149,7 @@ export class InputManager {
     bindBtn('btn-left', () => { this.touchLeft = true; }, () => { this.touchLeft = false; });
     bindBtn('btn-right', () => { this.touchRight = true; }, () => { this.touchRight = false; });
     bindBtn('btn-run', () => { this.touchRun = !this.touchRun; }, () => {});
-    bindBtn('btn-jump', () => { this.jumpJustPressed = true; }, () => {});
+    bindBtn('btn-jump', () => { this.jumpJustPressed = true; this.touchJumpHeld = true; }, () => { this.touchJumpHeld = false; });
     bindBtn('btn-jetpack', () => { this.touchJetpack = true; }, () => { this.touchJetpack = false; });
     bindBtn('btn-laser', () => {
       this.shootJustPressed = true;
@@ -182,38 +196,189 @@ export class InputManager {
     if (this.keys['KeyA'] || this.keys['ArrowLeft'] || this.touchLeft) mx -= 1;
     if (this.keys['KeyD'] || this.keys['ArrowRight'] || this.touchRight) mx += 1;
 
-    // Gamepad axes
+    // Triple-AAA Gamepad Polling (Analog Left Stick, Analog RT/LT Jetpack, Right-Stick 360° Aim, Edge-Detected Actions)
+    let padJumpHeld = false;
+    let padJetpackThrottle = 0;
+    let padJetpackDirect = false;
+    let padRun = false;
+    let padCrouch = false;
+    let padShootHeld = false;
+    let padShieldHeld = false;
+    this.hasGamepadAim = false;
+
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const pad of gamepads) {
-      if (pad) {
-        if (pad.axes[0] < -0.3 || pad.buttons[14]?.pressed) mx = -1;
-        if (pad.axes[0] > 0.3 || pad.buttons[15]?.pressed) mx = 1;
-        if (pad.buttons[0]?.pressed) this.jumpJustPressed = true;
-        if (pad.buttons[7]?.pressed || pad.buttons[5]?.pressed) this.jetpack = true;
-        if (pad.buttons[2]?.pressed) this.shootJustPressed = true;
-        if (pad.buttons[10]?.pressed || pad.buttons[4]?.pressed) this.run = true;
+      if (!pad) continue;
 
-        // Right stick aim if available
-        if (Math.abs(pad.axes[2]) > 0.3 || Math.abs(pad.axes[3]) > 0.3) {
-          this.hasMouse = true;
+      // 1. Left Stick with radial deadzone (0.14) & silky Triple-AAA response curve
+      const rawLx = pad.axes[0] ?? 0;
+      const rawLy = pad.axes[1] ?? 0;
+      const deadzone = 0.14;
+      if (Math.abs(rawLx) > deadzone) {
+        const norm = Math.min(1, (Math.abs(rawLx) - deadzone) / (1 - deadzone));
+        const curved = Math.sign(rawLx) * Math.pow(norm, 1.32);
+        mx = curved;
+        this.isGamepadActive = true;
+        if (norm > 0.88) padRun = true; // Push stick all the way to naturally transition into sprint!
+      }
+      // Track upward left-stick tilt for classic Contra/Metroid diagonal up-fire on gamepad
+      this.leftStickAimY = rawLy < -0.35 ? Math.min(1, (-rawLy - 0.35) / 0.65) : 0;
+
+      if (pad.buttons[14]?.pressed) { mx = -1; this.isGamepadActive = true; } // D-Pad Left
+      if (pad.buttons[15]?.pressed) { mx = 1; this.isGamepadActive = true; }  // D-Pad Right
+
+      // 2. Crouch (D-Pad Down or Left Stick pulled down firmly)
+      if (pad.buttons[13]?.pressed || rawLy > 0.65) {
+        padCrouch = true;
+        this.isGamepadActive = true;
+      }
+
+      // 3. Jump / Double Jump (A button = buttons[0], edge-detected!)
+      if (pad.buttons[0]?.pressed) {
+        padJumpHeld = true;
+        this.isGamepadActive = true;
+        if (!this.prevGamepadJump) this.jumpJustPressed = true;
+      }
+
+      // 4. Dedicated Analog Jetpack Triggers: RT (buttons[7]) or LT (buttons[6])
+      const rtVal = pad.buttons[7]?.value ?? (pad.buttons[7]?.pressed ? 1 : 0);
+      const ltVal = pad.buttons[6]?.value ?? (pad.buttons[6]?.pressed ? 1 : 0);
+      const triggerVal = Math.max(rtVal, ltVal);
+      if (triggerVal > 0.08) {
+        const normTrig = Math.min(1, (triggerVal - 0.08) / 0.92);
+        padJetpackThrottle = Math.max(padJetpackThrottle, normTrig);
+        padJetpackDirect = true;
+        this.isGamepadActive = true;
+      }
+
+      // 5. Colt Peacemaker Shoot: X (buttons[2]) or RB (buttons[5]) — instant tap + crisp rapid-fire hold!
+      if (pad.buttons[2]?.pressed || pad.buttons[5]?.pressed) {
+        padShootHeld = true;
+        this.isGamepadActive = true;
+        if (this.gameplayInputEnabled) {
+          if (!this.prevGamepadShoot) {
+            this.shootJustPressed = true;
+            this.gamepadRapidFireCooldown = 0.21;
+          } else {
+            this.gamepadRapidFireCooldown -= 1 / 60;
+            if (this.gamepadRapidFireCooldown <= 0) {
+              this.shootJustPressed = true;
+              this.gamepadRapidFireCooldown = 0.21;
+            }
+          }
         }
+      }
+
+      // 6. Forcefield / Ball Mode Toggle (B = buttons[1] or Y = buttons[3], edge-detected)
+      if (pad.buttons[1]?.pressed || pad.buttons[3]?.pressed) {
+        padShieldHeld = true;
+        this.isGamepadActive = true;
+        if (!this.prevGamepadShield) this.shieldJustPressed = true;
+      }
+
+      // 7. Sprint Boost (LB = buttons[4] or L3 = buttons[10])
+      if (pad.buttons[4]?.pressed || pad.buttons[10]?.pressed) {
+        padRun = true;
+        this.isGamepadActive = true;
+      }
+
+      // 8. Right Stick 360° Free Aiming (axes[2], axes[3])
+      const rx = pad.axes[2] ?? 0;
+      const ry = pad.axes[3] ?? 0;
+      if (Math.hypot(rx, ry) > 0.20) {
+        this.rightStickAimX = rx;
+        this.rightStickAimY = -ry; // Invert Y so up on stick = aim up in world space
+        this.hasGamepadAim = true;
+        this.isGamepadActive = true;
       }
     }
 
-    this.moveX = mx;
+    this.prevGamepadJump = padJumpHeld;
+    this.prevGamepadShoot = padShootHeld;
+    this.prevGamepadShield = padShieldHeld;
+
+    this.moveX = THREE.MathUtils.clamp(mx, -1, 1);
     this.moveZ = 0;
 
-    // 2. Sprint / Run
+    // 2. Sprint / Run (Keyboard Shift, Touch, or Gamepad LB/L3/Full Stick)
     const kbRun = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
-    this.run = kbRun || this.touchRun;
+    this.run = kbRun || this.touchRun || padRun;
 
-    // 3. Jetpack Thrust
+    // 2b. Jump Held (for Triple-AAA variable jump height)
+    this.jumpHeld = !!(this.keys['Space'] || this.keys['KeyW'] || this.keys['ArrowUp'] || this.touchJumpHeld || padJumpHeld);
+
+    // 3. Jetpack Thrust & Analog Throttle
+    // Supports: RT/LT analog triggers (instant), Space/W/Up hold, Touch jetpack, AND 3rd press+hold of Gamepad A!
     const kbJetpack = !!(this.keys['Space'] || (this.keys['KeyW'] && !this.jumpJustPressed) || (this.keys['ArrowUp'] && !this.jumpJustPressed) || this.touchJetpack);
-    this.jetpack = kbJetpack;
+    const padAJetpack = padJumpHeld && !this.jumpJustPressed;
+    this.jetpackDirectTrigger = padJetpackDirect || this.touchJetpack;
+    this.jetpack = kbJetpack || padJetpackDirect || padAJetpack;
+    this.jetpackThrottle = padJetpackDirect ? padJetpackThrottle : ((kbJetpack || padAJetpack) ? 1.0 : 0.0);
 
-    // 4. Crouch Input (Hold S or Down Arrow)
+    // 4. Crouch Input (Hold S, Down Arrow, Touch, or Gamepad Down)
     const kbCrouch = !!(this.keys['KeyS'] || this.keys['ArrowDown']);
-    this.crouch = kbCrouch || this.touchCrouch;
+    this.crouch = kbCrouch || this.touchCrouch || padCrouch;
+  }
+
+  /**
+   * Ultra-subtle, throttled console haptic tap (never buzzes or runs in menus)
+   */
+  public triggerRumble(durationMs: number = 40, weakMagnitude: number = 0.20, strongMagnitude: number = 0.12) {
+    const now = performance.now();
+    if (now - this.lastRumbleMs < 180) return; // Prevent rapid continuous buzzing
+    this.lastRumbleMs = now;
+
+    const clampedDur = Math.min(45, Math.max(15, durationMs * 0.55));
+    const weak = Math.min(0.18, Math.max(0, weakMagnitude * 0.28));
+    const strong = Math.min(0.12, Math.max(0, strongMagnitude * 0.18));
+
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const pad of gamepads) {
+      const act = (pad as unknown as { vibrationActuator?: { playEffect?: (type: string, params: Record<string, number>) => Promise<void> } })?.vibrationActuator;
+      if (act && typeof act.playEffect === 'function') {
+        try {
+          act.playEffect('dual-rumble', {
+            startDelay: 0,
+            duration: clampedDur,
+            weakMagnitude: weak,
+            strongMagnitude: strong
+          });
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
+  /**
+   * Projects Gamepad Right-Stick 3D aim point onto the on-screen #reticle so controller players
+   * see crisp real-time visual aiming feedback!
+   */
+  public syncGamepadReticle(camera: THREE.PerspectiveCamera, worldAimPos: THREE.Vector3) {
+    if (!this.reticleEl) return;
+    if (this.hasGamepadAim) {
+      const projected = worldAimPos.clone().project(camera);
+      const sx = (projected.x * 0.5 + 0.5) * window.innerWidth;
+      const sy = (-projected.y * 0.5 + 0.5) * window.innerHeight;
+      this.reticleEl.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+      this.reticleEl.classList.add('active');
+    } else if (this.isGamepadActive) {
+      this.reticleEl.classList.remove('active');
+    }
+  }
+
+  public stopRumble() {
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const pad of gamepads) {
+      const act = (pad as unknown as { vibrationActuator?: { reset?: () => Promise<void>; playEffect?: (type: string, params: Record<string, number>) => Promise<void> } })?.vibrationActuator;
+      if (act) {
+        try {
+          if (typeof act.reset === 'function') {
+            act.reset();
+          } else if (typeof act.playEffect === 'function') {
+            act.playEffect('dual-rumble', { startDelay: 0, duration: 1, weakMagnitude: 0, strongMagnitude: 0 });
+          }
+        } catch { /* ignore */ }
+      }
+    }
   }
 
   public consumeJumpTrigger(): boolean {
