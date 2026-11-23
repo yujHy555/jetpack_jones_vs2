@@ -1709,6 +1709,31 @@
         <span id="fps-ms" style="color:#ff9e44;font-size:11px;">16.7ms</span>
       </div>
 
+      <!-- Always-On-Screen Mute Audio Button (Visible across Main Menu, Hangar, Level 1, Level 2 & Game Over!) -->
+      <button id="btn-always-mute" title="Mute / Unmute All Audio" style="
+        position: fixed;
+        top: 132px;
+        left: 14px;
+        z-index: 10000;
+        pointer-events: auto;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        background: rgba(16, 12, 10, 0.86);
+        border: 1.5px solid #00f5ff;
+        border-radius: 6px;
+        box-shadow: 0 0 10px rgba(0, 245, 255, 0.28);
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.7px;
+        color: #00f5ff;
+        text-shadow: 0 0 6px rgba(0, 245, 255, 0.55);
+        transition: all 0.15s ease;
+      ">🔊 AUDIO ON</button>
+
       <!-- 1979 Retro-Space Preloader Overlay (Blocks jerky startup until all assets & shaders are ready!) -->
       <div id="boot-preloader" style="
         position: fixed;

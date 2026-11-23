@@ -257,11 +257,36 @@ class Game {
       });
     }
 
+    const syncAudioButtons = (enabled: boolean) => {
+      const topAudio = document.getElementById('btn-audio');
+      if (topAudio) topAudio.textContent = enabled ? '🔊 SFX ON' : '🔇 SFX OFF';
+      const alwaysMute = document.getElementById('btn-always-mute');
+      if (alwaysMute) {
+        alwaysMute.textContent = enabled ? '🔊 AUDIO ON' : '🔇 MUTED';
+        alwaysMute.style.borderColor = enabled ? '#00f5ff' : '#ff4466';
+        alwaysMute.style.color = enabled ? '#00f5ff' : '#ff6677';
+        alwaysMute.style.boxShadow = enabled
+          ? '0 0 10px rgba(0, 245, 255, 0.28)'
+          : '0 0 10px rgba(255, 68, 102, 0.35)';
+      }
+    };
+
     const audioBtn = document.getElementById('btn-audio');
     if (audioBtn) {
       audioBtn.addEventListener('click', () => {
         const enabled = this.audioManager.toggle();
-        audioBtn.textContent = enabled ? '🔊 SFX ON' : '🔇 SFX OFF';
+        syncAudioButtons(enabled);
+        this.updateSettingsUI();
+      });
+    }
+
+    const alwaysMuteBtn = document.getElementById('btn-always-mute');
+    if (alwaysMuteBtn) {
+      alwaysMuteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const enabled = this.audioManager.toggle();
+        syncAudioButtons(enabled);
+        this.updateSettingsUI();
       });
     }
 
@@ -716,6 +741,12 @@ class Game {
         const enabled = this.audioManager.toggle();
         const topAudio = document.getElementById('btn-audio');
         if (topAudio) topAudio.textContent = enabled ? '🔊 SFX ON' : '🔇 SFX OFF';
+        const alwaysMute = document.getElementById('btn-always-mute');
+        if (alwaysMute) {
+          alwaysMute.textContent = enabled ? '🔊 AUDIO ON' : '🔇 MUTED';
+          alwaysMute.style.borderColor = enabled ? '#00f5ff' : '#ff4466';
+          alwaysMute.style.color = enabled ? '#00f5ff' : '#ff6677';
+        }
         this.updateSettingsUI();
       });
     }
