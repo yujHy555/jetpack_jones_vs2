@@ -19,14 +19,28 @@ export class InputManager {
   public leftStickAimY: number = 0;
   private prevGamepadJump: boolean = false;
   private prevGamepadShoot: boolean = false;
+  private prevGamepadSlide: boolean = false;
   private prevGamepadShield: boolean = false;
+  private prevGamepadL3: boolean = false;
+  private gamepadSprintToggle: boolean = false;
   private gamepadRapidFireCooldown: number = 0;
+  public slideJustPressed: boolean = false;
+
+  // Left-Mouse Drag Camera Rotation (Level 2 Free-Roam!)
+  private isLeftMouseDown: boolean = false;
+  private leftMouseDragged: boolean = false;
+  private lastMouseDragX: number = 0;
+  private lastMouseDragY: number = 0;
+  public mouseOrbitDeltaX: number = 0;
+  public mouseOrbitDeltaY: number = 0;
   private lastRumbleMs: number = 0;
   private touchJumpHeld: boolean = false;
   public shootJustPressed: boolean = false;
   public ragdollJustPressed: boolean = false;
   public handheldToggleJustPressed: boolean = false;
+  public cameraViewToggleJustPressed: boolean = false;
   public shieldJustPressed: boolean = false;
+  public isFreeRoam3D: boolean = false;
   public crouch: boolean = false;
   public touchCrouch: boolean = false;
   // Strictly gated to GameState.PLAYING so menu/load clicks & keys NEVER buffer a shot!
@@ -63,12 +77,16 @@ export class InputManager {
       const wasPressed = !!this.keys[e.code];
       this.keys[e.code] = true;
 
-      if ((e.code === 'KeyW' || e.code === 'ArrowUp') && !wasPressed) {
+      if ((e.code === 'KeyW' || e.code === 'ArrowUp') && !wasPressed && !this.isFreeRoam3D) {
         this.jumpJustPressed = true;
       }
 
       if ((e.code === 'Space') && !wasPressed) {
         this.jumpJustPressed = true;
+      }
+
+      if ((e.code === 'KeyV') && !wasPressed) {
+        this.cameraViewToggleJustPressed = true;
       }
 
       if ((e.code === 'KeyJ' || e.code === 'KeyZ' || e.code === 'Enter') && !wasPressed) {
@@ -117,7 +135,37 @@ export class InputManager {
           return;
         }
         this.isGamepadActive = false;
-        this.shootJustPressed = true;
+        if (this.isFreeRoam3D) {
+          // In Level 2 3D Free-Roam: Left-Mouse Drag rotates the camera; quick Left-Click shoots!
+          this.isLeftMouseDown = true;
+          this.leftMouseDragged = false;
+          this.lastMouseDragX = e.clientX;
+          this.lastMouseDragY = e.clientY;
+        } else {
+          this.shootJustPressed = true;
+        }
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!this.isLeftMouseDown || !this.isFreeRoam3D) return;
+      const dx = e.clientX - this.lastMouseDragX;
+      const dy = e.clientY - this.lastMouseDragY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        this.leftMouseDragged = true;
+      }
+      this.lastMouseDragX = e.clientX;
+      this.lastMouseDragY = e.clientY;
+      this.mouseOrbitDeltaX += dx;
+      this.mouseOrbitDeltaY += dy;
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0 && this.isLeftMouseDown) {
+        this.isLeftMouseDown = false;
+        if (this.isFreeRoam3D && !this.leftMouseDragged && this.gameplayInputEnabled) {
+          this.shootJustPressed = true;
+        }
       }
     });
   }
@@ -190,11 +238,17 @@ export class InputManager {
     }
   }
 
-  public update(_isIsometric: boolean = false) {
-    // 1. Horizontal Move Input
+  public update(isFreeRoam3D: boolean = false) {
+    this.isFreeRoam3D = isFreeRoam3D;
+    // 1. Horizontal (and 3D Z) Move Input
     let mx = 0;
+    let mz = 0;
     if (this.keys['KeyA'] || this.keys['ArrowLeft'] || this.touchLeft) mx -= 1;
     if (this.keys['KeyD'] || this.keys['ArrowRight'] || this.touchRight) mx += 1;
+    if (isFreeRoam3D) {
+      if (this.keys['KeyW'] || this.keys['ArrowUp']) mz -= 1;
+      if (this.keys['KeyS'] || this.keys['ArrowDown']) mz += 1;
+    }
 
     // Triple-AAA Gamepad Polling (Analog Left Stick, Analog RT/LT Jetpack, Right-Stick 360° Aim, Edge-Detected Actions)
     let padJumpHeld = false;
@@ -210,7 +264,8 @@ export class InputManager {
     for (const pad of gamepads) {
       if (!pad) continue;
 
-      // 1. Left Stick with radial deadzone (0.14) & silky Triple-AAA response curve
+      // 1. Left Stick with radial deadzone (0.14) — smoothly WALKS across full range!
+      // Push down Left Stick (L3) or hold LB to RUN/SPRINT!
       const rawLx = pad.axes[0] ?? 0;
       const rawLy = pad.axes[1] ?? 0;
       const deadzone = 0.14;
@@ -219,16 +274,26 @@ export class InputManager {
         const curved = Math.sign(rawLx) * Math.pow(norm, 1.32);
         mx = curved;
         this.isGamepadActive = true;
-        if (norm > 0.88) padRun = true; // Push stick all the way to naturally transition into sprint!
       }
-      // Track upward left-stick tilt for classic Contra/Metroid diagonal up-fire on gamepad
-      this.leftStickAimY = rawLy < -0.35 ? Math.min(1, (-rawLy - 0.35) / 0.65) : 0;
+      // Track upward left-stick tilt for diagonal up-fire (2D) OR full 360° analog Z movement (Level 2 Free-Roam!)
+      if (isFreeRoam3D && Math.abs(rawLy) > deadzone) {
+        const normZ = Math.min(1, (Math.abs(rawLy) - deadzone) / (1 - deadzone));
+        mz = Math.sign(rawLy) * Math.pow(normZ, 1.32);
+        this.isGamepadActive = true;
+      }
+      this.leftStickAimY = !isFreeRoam3D && rawLy < -0.35 ? Math.min(1, (-rawLy - 0.35) / 0.65) : 0;
+
+      // Reset L3 Sprint toggle cleanly when player stops moving the stick
+      if (Math.hypot(mx, mz) < 0.12) {
+        this.gamepadSprintToggle = false;
+      }
 
       if (pad.buttons[14]?.pressed) { mx = -1; this.isGamepadActive = true; } // D-Pad Left
       if (pad.buttons[15]?.pressed) { mx = 1; this.isGamepadActive = true; }  // D-Pad Right
+      if (isFreeRoam3D && pad.buttons[12]?.pressed) { mz = -1; this.isGamepadActive = true; } // D-Pad Up
 
-      // 2. Crouch (D-Pad Down or Left Stick pulled down firmly)
-      if (pad.buttons[13]?.pressed || rawLy > 0.65) {
+      // 2. Crouch (D-Pad Down, or Left Stick down in 2D mode)
+      if (pad.buttons[13]?.pressed || (!isFreeRoam3D && rawLy > 0.65)) {
         padCrouch = true;
         this.isGamepadActive = true;
       }
@@ -251,8 +316,8 @@ export class InputManager {
         this.isGamepadActive = true;
       }
 
-      // 5. Colt Peacemaker Shoot: X (buttons[2]) or RB (buttons[5]) — instant tap + crisp rapid-fire hold!
-      if (pad.buttons[2]?.pressed || pad.buttons[5]?.pressed) {
+      // 5. Colt Peacemaker Shoot: X (buttons[2]) — instant tap + crisp rapid-fire hold!
+      if (pad.buttons[2]?.pressed) {
         padShootHeld = true;
         this.isGamepadActive = true;
         if (this.gameplayInputEnabled) {
@@ -269,6 +334,14 @@ export class InputManager {
         }
       }
 
+      // 5b. Dedicated Running Slide: RB (buttons[5]) — edge-detected!
+      const rbPressed = !!pad.buttons[5]?.pressed;
+      if (rbPressed && !this.prevGamepadSlide && this.gameplayInputEnabled) {
+        this.slideJustPressed = true;
+        this.isGamepadActive = true;
+      }
+      this.prevGamepadSlide = rbPressed;
+
       // 6. Forcefield / Ball Mode Toggle (B = buttons[1] or Y = buttons[3], edge-detected)
       if (pad.buttons[1]?.pressed || pad.buttons[3]?.pressed) {
         padShieldHeld = true;
@@ -276,8 +349,13 @@ export class InputManager {
         if (!this.prevGamepadShield) this.shieldJustPressed = true;
       }
 
-      // 7. Sprint Boost (LB = buttons[4] or L3 = buttons[10])
-      if (pad.buttons[4]?.pressed || pad.buttons[10]?.pressed) {
+      // 7. Sprint Boost: Click or Hold Left Stick (L3 = buttons[10]) or LB (buttons[4])!
+      const l3Pressed = !!pad.buttons[10]?.pressed;
+      if (l3Pressed && !this.prevGamepadL3) {
+        this.gamepadSprintToggle = !this.gamepadSprintToggle;
+      }
+      this.prevGamepadL3 = l3Pressed;
+      if (pad.buttons[4]?.pressed || l3Pressed || this.gamepadSprintToggle) {
         padRun = true;
         this.isGamepadActive = true;
       }
@@ -298,25 +376,27 @@ export class InputManager {
     this.prevGamepadShield = padShieldHeld;
 
     this.moveX = THREE.MathUtils.clamp(mx, -1, 1);
-    this.moveZ = 0;
+    this.moveZ = isFreeRoam3D ? THREE.MathUtils.clamp(mz, -1, 1) : 0;
 
     // 2. Sprint / Run (Keyboard Shift, Touch, or Gamepad LB/L3/Full Stick)
     const kbRun = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
     this.run = kbRun || this.touchRun || padRun;
 
     // 2b. Jump Held (for Triple-AAA variable jump height)
-    this.jumpHeld = !!(this.keys['Space'] || this.keys['KeyW'] || this.keys['ArrowUp'] || this.touchJumpHeld || padJumpHeld);
+    this.jumpHeld = !!(this.keys['Space'] || (!isFreeRoam3D && (this.keys['KeyW'] || this.keys['ArrowUp'])) || this.touchJumpHeld || padJumpHeld);
 
     // 3. Jetpack Thrust & Analog Throttle
-    // Supports: RT/LT analog triggers (instant), Space/W/Up hold, Touch jetpack, AND 3rd press+hold of Gamepad A!
-    const kbJetpack = !!(this.keys['Space'] || (this.keys['KeyW'] && !this.jumpJustPressed) || (this.keys['ArrowUp'] && !this.jumpJustPressed) || this.touchJetpack);
+    // Supports: RT/LT analog triggers (instant), Space hold, Touch jetpack, AND 3rd press+hold of Gamepad A!
+    const kbJetpack = !!(this.keys['Space'] || (!isFreeRoam3D && ((this.keys['KeyW'] && !this.jumpJustPressed) || (this.keys['ArrowUp'] && !this.jumpJustPressed))) || this.touchJetpack);
     const padAJetpack = padJumpHeld && !this.jumpJustPressed;
     this.jetpackDirectTrigger = padJetpackDirect || this.touchJetpack;
     this.jetpack = kbJetpack || padJetpackDirect || padAJetpack;
     this.jetpackThrottle = padJetpackDirect ? padJetpackThrottle : ((kbJetpack || padAJetpack) ? 1.0 : 0.0);
 
-    // 4. Crouch Input (Hold S, Down Arrow, Touch, or Gamepad Down)
-    const kbCrouch = !!(this.keys['KeyS'] || this.keys['ArrowDown']);
+    // 4. Crouch Input (Hold S/Down in 2D, or C/Ctrl in 3D Free-Roam, plus Touch or Gamepad D-Down)
+    const kbCrouch = isFreeRoam3D
+      ? !!(this.keys['KeyC'] || this.keys['ControlLeft'])
+      : !!(this.keys['KeyS'] || this.keys['ArrowDown'] || this.keys['KeyC']);
     this.crouch = kbCrouch || this.touchCrouch || padCrouch;
   }
 
@@ -397,6 +477,14 @@ export class InputManager {
     return false;
   }
 
+  public consumeSlideTrigger(): boolean {
+    if (this.slideJustPressed) {
+      this.slideJustPressed = false;
+      return true;
+    }
+    return false;
+  }
+
   public consumeRagdollTrigger(): boolean {
     return false;
   }
@@ -407,6 +495,21 @@ export class InputManager {
       return true;
     }
     return false;
+  }
+
+  public consumeCameraViewToggleTrigger(): boolean {
+    if (this.cameraViewToggleJustPressed) {
+      this.cameraViewToggleJustPressed = false;
+      return true;
+    }
+    return false;
+  }
+
+  public consumeMouseOrbitDelta(): { dx: number; dy: number } {
+    const out = { dx: this.mouseOrbitDeltaX, dy: this.mouseOrbitDeltaY };
+    this.mouseOrbitDeltaX = 0;
+    this.mouseOrbitDeltaY = 0;
+    return out;
   }
 
   public consumeShieldTrigger(): boolean {

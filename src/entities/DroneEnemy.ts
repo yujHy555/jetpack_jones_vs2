@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 export interface DroneLaser {
-  mesh: THREE.Mesh;
+  mesh: THREE.Object3D;
   position: THREE.Vector3;
   velocity: THREE.Vector3;
   active: boolean;
@@ -59,6 +59,8 @@ export class DroneEnemy {
   private shockRing: THREE.Mesh;
   private fireballMesh: THREE.Mesh;
   private flashMesh: THREE.Mesh;
+  private muzzleFlashOrb!: THREE.Mesh;
+  private muzzleFlashTimer: number = 0;
 
   constructor(scene: THREE.Scene, startX: number, startY: number = 0.8, patrolRange: number = 6.0, isAlien: boolean = false) {
     this.isAlien = isAlien;
@@ -291,18 +293,56 @@ export class DroneEnemy {
     this.shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
     scene.add(this.shadowMesh);
 
-    // 4. Laser Bolt Pool (Lightweight & High-Performance)
-    const laserGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.75, 8);
-    laserGeo.rotateZ(Math.PI / 2);
-    const laserMat = new THREE.MeshBasicMaterial({ color: this.isAlien ? 0x39ff14 : 0xff0022 });
+    // 4. Next-Gen Triple-AAA Alien Plasma Bolt Pool (White-Hot Needle Core + Glowing Additive Energy Sheath + Spearhead!)
+    const coreGeo = new THREE.CylinderGeometry(0.030, 0.030, 1.18, 8);
+    coreGeo.rotateZ(Math.PI / 2);
+    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+    const sheathGeo = new THREE.CylinderGeometry(0.095, 0.075, 1.42, 10);
+    sheathGeo.rotateZ(Math.PI / 2);
+    const sheathMat = new THREE.MeshBasicMaterial({
+      color: this.isAlien ? 0x52ff1a : 0xff1844,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+
+    const tipGeo = new THREE.SphereGeometry(0.11, 8, 8);
+    const tipMat = new THREE.MeshBasicMaterial({
+      color: this.isAlien ? 0xc8ff66 : 0xff7788,
+      transparent: true,
+      opacity: 0.90,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+
+    // Drone cannon muzzle flash flare orb
+    this.muzzleFlashOrb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.24, 10, 10),
+      new THREE.MeshBasicMaterial({
+        color: this.isAlien ? 0x72ff2a : 0xff2a55,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      })
+    );
+    this.muzzleFlashOrb.position.set(0, -0.25, 0.08);
+    this.group.add(this.muzzleFlashOrb);
 
     for (let i = 0; i < 8; i++) {
-      const mesh = new THREE.Mesh(laserGeo, laserMat);
-      mesh.visible = false;
-      scene.add(mesh);
+      const boltGroup = new THREE.Group();
+      boltGroup.add(new THREE.Mesh(coreGeo, coreMat));
+      boltGroup.add(new THREE.Mesh(sheathGeo, sheathMat));
+      const tip = new THREE.Mesh(tipGeo, tipMat);
+      tip.position.x = 0.58;
+      boltGroup.add(tip);
+      boltGroup.visible = false;
+      scene.add(boltGroup);
 
       this.lasers.push({
-        mesh,
+        mesh: boltGroup,
         position: new THREE.Vector3(),
         velocity: new THREE.Vector3(),
         active: false,
@@ -630,17 +670,29 @@ export class DroneEnemy {
 
     laser.active = true;
     laser.life = 1.6;
-    laser.position.set(this.position.x, this.position.y - 0.25, 0);
+    laser.position.set(this.position.x, this.position.y - 0.25, this.position.z);
     laser.mesh.position.copy(laser.position);
     laser.mesh.visible = true;
 
+    // Dramatic muzzle flash flare + snappy recoil wobble!
+    this.muzzleFlashTimer = 0.16;
+    this.jiggleTimer = Math.max(this.jiggleTimer, 0.14);
+
     const angle = Math.atan2(targetY - laser.position.y, targetX - laser.position.x);
-    const speed = 16.0;
+    const speed = 17.5;
     laser.velocity.set(Math.cos(angle) * speed, Math.sin(angle) * speed, 0);
-    laser.mesh.rotation.z = angle;
+    laser.mesh.rotation.set(0, 0, angle);
   }
 
   private updateLasers(dt: number) {
+    if (this.muzzleFlashTimer > 0) {
+      this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - dt);
+      const f = this.muzzleFlashTimer / 0.16;
+      (this.muzzleFlashOrb.material as THREE.MeshBasicMaterial).opacity = f * 0.95;
+      this.muzzleFlashOrb.scale.setScalar(0.55 + f * 1.45);
+    } else if (this.muzzleFlashOrb) {
+      (this.muzzleFlashOrb.material as THREE.MeshBasicMaterial).opacity = 0;
+    }
     for (const l of this.lasers) {
       if (!l.active) continue;
       l.life -= dt;

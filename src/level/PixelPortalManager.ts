@@ -45,14 +45,18 @@ export class PixelPortalManager {
   }
 
   /**
-   * Automatically shifts doorways clear of ANY overlapping platforms, cover barriers, crates, or obstacles
-   * with generous ±2.8m horizontal clearance so Pixel Doors are NEVER obstructed by anything!
+   * Shifts doorways clear of overlapping STATIC platforms/obstacles ONLY while off-screen
+   * (or on initial spawn) so a doorway NEVER visibly jumps/moves while the player is playing near it!
    */
   public ensureClearOfPlatforms(
     platforms: { x: number; y: number; width: number; height: number }[],
-    extraBlockers: { x: number; y: number; halfW: number; halfH: number }[] = []
+    extraBlockers: { x: number; y: number; halfW: number; halfH: number }[] = [],
+    playerX: number = -9999
   ) {
     for (const door of this.doors) {
+      // Never shift a doorway that is already within or near the player's camera view!
+      if (playerX > -9000 && Math.abs(door.x - playerX) < 26.0) continue;
+
       let attempts = 0;
       while (attempts < 16) {
         const blockedByPlat = platforms.some((p) => {
@@ -430,6 +434,15 @@ export class PixelPortalManager {
     this.prevPlayerX = startPlayerX;
     this.initializedPlayerX = true;
     this.isPixelModeActive = false;
-    for (const d of this.doors) d.cooldown = 0;
+    const defaultXs = [14.0, 46.0];
+    for (let i = 0; i < this.doors.length; i++) {
+      const d = this.doors[i];
+      d.cooldown = 0;
+      d.surgeTimer = 0;
+      if (defaultXs[i] !== undefined) {
+        d.x = defaultXs[i];
+        d.group.position.x = d.x;
+      }
+    }
   }
 }

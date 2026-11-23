@@ -57,12 +57,15 @@ export class MixamoCharacterRig {
   private prevFootMode: 'walk' | 'run' | 'crouch' | null = null;
   public readyPromise: Promise<void>;
 
-  // Pre-allocated scratch math for zero-GC per-frame gun basis alignment
+  // Pre-allocated scratch math for zero-GC per-frame gun basis & forward-cone alignment
   private readonly _gunWorldUp = new THREE.Vector3(0, 1, 0);
   private readonly _gunSide = new THREE.Vector3();
   private readonly _gunUp = new THREE.Vector3();
   private readonly _gunBasisMat = new THREE.Matrix4();
   private readonly _qGunWorld = new THREE.Quaternion();
+  private readonly _charFwd = new THREE.Vector3();
+  private readonly _charRight = new THREE.Vector3();
+  public use3DForwardAim: boolean = false;
 
   // Bone anchors
   private rightShoulderBone: THREE.Object3D | null = null;
@@ -71,6 +74,10 @@ export class MixamoCharacterRig {
   private spineRootBone: THREE.Object3D | null = null;
   private rightHandBone: THREE.Object3D | null = null;
   private spineBone: THREE.Object3D | null = null;
+  private leftFootBone: THREE.Object3D | null = null;
+  private rightFootBone: THREE.Object3D | null = null;
+  private readonly _qFootSlope = new THREE.Quaternion();
+  private readonly _footAxisX = new THREE.Vector3(1, 0, 0);
   private readonly tmpWorldPos = new THREE.Vector3();
 
   // 1979 Retro Chrome Jetpack Assembly ("MK-79") + Older Vintage Industrial Model ("The Economist")
@@ -96,6 +103,8 @@ export class MixamoCharacterRig {
   private squashY: number = 1.0;
   private squashVel: number = 0.0;
   private leanPitch: number = 0.0;
+  private slopePitchSmooth: number = 0.0;
+  private slopeRollSmooth: number = 0.0;
   private doubleJumpSurgeTimer: number = 0.0;
   private crouchBlend: number = 0.0;
   private baseModelY: number = 0.0;
@@ -181,8 +190,9 @@ export class MixamoCharacterRig {
         map: diffuseTex,
         normalMap: normalTex,
         normalScale: new THREE.Vector2(0.85, 0.85),
-        roughness: 0.62,
-        metalness: 0.08
+        roughness: 0.72,
+        metalness: 0.06,
+        envMapIntensity: 0.35
       });
 
       baseModel.traverse((obj) => {
@@ -211,6 +221,12 @@ export class MixamoCharacterRig {
         }
         if (!this.spineBone && n.includes('spine2')) {
           this.spineBone = obj;
+        }
+        if (!this.leftFootBone && (n.includes('leftfoot') || n.endsWith('left_foot')) && !n.includes('toe')) {
+          this.leftFootBone = obj;
+        }
+        if (!this.rightFootBone && (n.includes('rightfoot') || n.endsWith('right_foot')) && !n.includes('toe')) {
+          this.rightFootBone = obj;
         }
       });
       if (!this.spineBone) {
@@ -377,12 +393,12 @@ export class MixamoCharacterRig {
       opacity: 0.35
     });
 
-    // Twin Mirror-Chrome Propellant Tanks (Left & Right)
+    // Twin Mirror-Chrome Propellant Tanks (Left & Right — generous radial clearances = ZERO Z-fighting!)
     const tankGeo = new THREE.CylinderGeometry(0.088, 0.088, 0.36, 20);
     const capGeo = new THREE.SphereGeometry(0.088, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-    const bandRedGeo = new THREE.CylinderGeometry(0.091, 0.091, 0.048, 20);
-    const bandCreamGeo = new THREE.CylinderGeometry(0.0905, 0.0905, 0.018, 20);
-    const strapGeo = new THREE.CylinderGeometry(0.093, 0.093, 0.022, 20);
+    const bandRedGeo = new THREE.CylinderGeometry(0.095, 0.095, 0.046, 20);
+    const bandCreamGeo = new THREE.CylinderGeometry(0.094, 0.094, 0.018, 20);
+    const strapGeo = new THREE.CylinderGeometry(0.099, 0.099, 0.022, 20);
     const bellGeo = new THREE.CylinderGeometry(0.046, 0.076, 0.11, 18, 1, true);
     const glowRingGeo = new THREE.TorusGeometry(0.056, 0.012, 10, 20);
     glowRingGeo.rotateX(Math.PI / 2);
@@ -499,15 +515,15 @@ export class MixamoCharacterRig {
     arch.position.set(0, 0.18, -0.01);
     jp.add(arch);
 
-    // 1979 Analog Pressure Gauge Dial on back of manifold
-    const dialBezel = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.02, 18), mirrorChrome);
+    // 1979 Analog Pressure Gauge Dial on back of manifold (clean Z separation = ZERO Z-fighting!)
+    const dialBezel = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.018, 18), mirrorChrome);
     dialBezel.rotation.x = Math.PI / 2;
-    dialBezel.position.set(0, 0.04, -0.065);
+    dialBezel.position.set(0, 0.04, -0.068);
     jp.add(dialBezel);
 
-    const dialFace = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.022, 18), retroCream);
+    const dialFace = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.008, 18), retroCream);
     dialFace.rotation.x = Math.PI / 2;
-    dialFace.position.set(0, 0.04, -0.067);
+    dialFace.position.set(0, 0.04, -0.079);
     jp.add(dialFace);
 
     // Twin Blinking 1979 Status LEDs
@@ -516,11 +532,11 @@ export class MixamoCharacterRig {
     this.ledRightMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
 
     const ledL = new THREE.Mesh(ledGeo, this.ledLeftMat);
-    ledL.position.set(-0.042, -0.045, -0.068);
+    ledL.position.set(-0.042, -0.045, -0.076);
     jp.add(ledL);
 
     const ledR = new THREE.Mesh(ledGeo, this.ledRightMat);
-    ledR.position.set(0.042, -0.045, -0.068);
+    ledR.position.set(0.042, -0.045, -0.076);
     jp.add(ledR);
 
     // Retro Swept Stabilizer Finlets (Left & Right)
@@ -602,21 +618,21 @@ export class MixamoCharacterRig {
     mainTank.position.set(0, 0.02, -0.02);
     ep.add(mainTank);
 
-    // Welded iron reinforcement strap bands around the boxy tank
-    const bandGeo = new THREE.BoxGeometry(0.36, 0.036, 0.18);
-    for (const by of [0.16, -0.10]) {
+    // Welded iron reinforcement strap bands around the boxy tank (clear of warning plate = ZERO Z-fighting!)
+    const bandGeo = new THREE.BoxGeometry(0.365, 0.034, 0.184);
+    for (const by of [0.168, -0.145]) {
       const band = new THREE.Mesh(bandGeo, dullIron);
       band.position.set(0, by, -0.02);
       ep.add(band);
     }
 
-    // 8 Chunky Corner Rivet Bolts on the rear face
-    const boltGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.014, 6);
+    // 8 Chunky Corner Rivet Bolts on the rear face (cleanly offset from tank back at -0.100)
+    const boltGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.012, 6);
     boltGeo.rotateX(Math.PI / 2);
     for (const bx of [-0.14, 0.14]) {
-      for (const by of [0.20, 0.06, -0.06, -0.16]) {
+      for (const by of [0.205, 0.06, -0.06, -0.185]) {
         const bolt = new THREE.Mesh(boltGeo, vintageBrass);
-        bolt.position.set(bx, by, -0.105);
+        bolt.position.set(bx, by, -0.112);
         ep.add(bolt);
       }
     }
@@ -648,24 +664,24 @@ export class MixamoCharacterRig {
       ep.add(elbowBot);
     }
 
-    // 4. Oversized Analog Brass Boiler Gauge on back + Vintage Ochre Warning Plate
-    const gaugeRim = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.025, 16), vintageBrass);
+    // 4. Oversized Analog Brass Boiler Gauge on back + Vintage Ochre Warning Plate (strict Z-layering = ZERO Z-fighting!)
+    const gaugeRim = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.022, 16), vintageBrass);
     gaugeRim.rotation.x = Math.PI / 2;
-    gaugeRim.position.set(0, 0.06, -0.105);
+    gaugeRim.position.set(0, 0.065, -0.114);
     ep.add(gaugeRim);
 
-    const gaugeFace = new THREE.Mesh(new THREE.CylinderGeometry(0.050, 0.050, 0.028, 16), creamDial);
+    const gaugeFace = new THREE.Mesh(new THREE.CylinderGeometry(0.050, 0.050, 0.008, 16), creamDial);
     gaugeFace.rotation.x = Math.PI / 2;
-    gaugeFace.position.set(0, 0.06, -0.107);
+    gaugeFace.position.set(0, 0.065, -0.128);
     ep.add(gaugeFace);
 
-    const needle = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.042, 0.008), dullIron);
-    needle.position.set(0.008, 0.068, -0.123);
+    const needle = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.040, 0.006), dullIron);
+    needle.position.set(0.008, 0.072, -0.136);
     needle.rotation.z = -0.45;
     ep.add(needle);
 
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.065, 0.012), hazardOchre);
-    plate.position.set(0, -0.07, -0.104);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.060, 0.010), hazardOchre);
+    plate.position.set(0, -0.055, -0.112);
     ep.add(plate);
 
     // 5. Chunky Welded Square Dark-Iron Exhaust Nozzles (Left & Right)
@@ -924,6 +940,15 @@ export class MixamoCharacterRig {
         const fullAct = this.actions[this.activeKey];
         const lowerAct = this.lowerActions[this.activeKey];
         if (fullAct && lowerAct) {
+          // Stop any active crossFadeTo weight interpolants on ALL full-body actions so they NEVER fight shootUpperAction!
+          for (const k of Object.keys(this.actions) as AnimKey[]) {
+            const a = this.actions[k];
+            if (a && k !== this.activeKey) {
+              a.stopFading();
+              a.setEffectiveWeight(0);
+            }
+          }
+          fullAct.stopFading();
           this.stopAllLowerActions();
           lowerAct.reset();
           lowerAct.time = fullAct.time;
@@ -969,23 +994,41 @@ export class MixamoCharacterRig {
     if (this._curDir.lengthSq() < 0.0001) return;
     this._curDir.normalize();
 
-    // Target aim direction in world XY plane (when shooting straight: (+1,0,0) right or (-1,0,0) left!)
-    const fwdX = Math.cos(this.targetAimAngle);
-    const fwdY = THREE.MathUtils.clamp(Math.sin(this.targetAimAngle), -0.68, 0.68);
-    this._desDir.set(fwdX, fwdY, 0).normalize();
+    // Compute Jones's true 3D world forward (+X of container) & right-shoulder outward (+Z of container)
+    // so his right shooting arm NEVER bends backward or clips through his torso/chest!
+    this._charFwd.set(1, 0, 0).transformDirection(this.container.matrixWorld).normalize();
+    this._charRight.set(0, 0, 1).transformDirection(this.container.matrixWorld).normalize();
+
+    if (this.use3DForwardAim) {
+      // 3D Free-Roam: aim straight along Jones's 3D facing direction (+ clamped vertical pitch)
+      const pitchY = THREE.MathUtils.clamp(Math.sin(this.targetAimAngle), -0.58, 0.58);
+      this._desDir.copy(this._charFwd).setY(pitchY).addScaledVector(this._charRight, 0.08).normalize();
+    } else {
+      // 2D Side-Scroller: target aim direction in world XY plane
+      const fwdX = Math.cos(this.targetAimAngle);
+      const fwdY = THREE.MathUtils.clamp(Math.sin(this.targetAimAngle), -0.68, 0.68);
+      this._desDir.set(fwdX, fwdY, 0).normalize();
+      // Guard against arm ever crossing through chest if turning around mid-shot!
+      if (this._desDir.dot(this._charFwd) < 0.35) {
+        this._desDir.copy(this._charFwd).setY(fwdY).normalize();
+      }
+      // Subtle outward shoulder clearance so the forearm & sleeve stay completely clear of his ribcage
+      this._desDir.addScaledVector(this._charRight, 0.06).normalize();
+    }
 
     // Exact shortest-arc world rotation from current arm direction -> desired straight aim direction
-    // (No artificial angle clamp so arm reaches 100% horizontal straightness in BOTH left & right directions!)
     this._qDelta.setFromUnitVectors(this._curDir, this._desDir);
-    const finalWeight = this.shootUpperWeight;
-    if (finalWeight < 0.999) {
-      this._qDelta.slerpQuaternions(this._qIdent, this._qDelta, finalWeight);
+    if (this.shootUpperWeight < 0.999) {
+      this._qDelta.slerpQuaternions(this._qIdent, this._qDelta, this.shootUpperWeight);
     }
 
     this.rightArmBone.parent.getWorldQuaternion(this._qParentWorld);
     this._qParentInv.copy(this._qParentWorld).invert();
     this._qLocalDelta.copy(this._qParentInv).multiply(this._qDelta).multiply(this._qParentWorld);
     this.rightArmBone.quaternion.premultiply(this._qLocalDelta);
+    this.rightArmBone.scale.set(1, 1, 1);
+    if (this.rightForeArmBone) this.rightForeArmBone.scale.set(1, 1, 1);
+    if (this.rightHandBone) this.rightHandBone.scale.set(1, 1, 1);
     this.rightArmBone.updateMatrixWorld(true);
 
     // Lock the Colt Peacemaker barrel itself dead-parallel to _desDir (0.0° tilt, parallel to ground when shooting straight!)
@@ -1164,13 +1207,21 @@ export class MixamoCharacterRig {
     }
   }
 
-  public triggerLand(impactStrength: number, _fromJetpack: boolean = false) {
+  public triggerLand(impactStrength: number, fromJetpack: boolean = false) {
     this.doubleJumpSurgeTimer = 0;
-    this.squashY = 1.0 - THREE.MathUtils.clamp(impactStrength * 0.14, 0.04, 0.14);
+    this.squashY = 1.0 - THREE.MathUtils.clamp(impactStrength * 0.12, 0.04, 0.12);
     this.squashVel = 0;
-    // Never hold jetpack_landing once Jones is already grounded!
-    // jetpack_landing plays in mid-air while approaching the floor and transitions cleanly to Idle/Walk/Run on touchdown.
-    this.landAnimTimer = 0;
+    if (fromJetpack && this.actions.jetpack_land) {
+      // Silky flowing jetpack touchdown recovery that smoothly blends into idle/walk/run!
+      this.landAnimTimer = 0.28;
+      if (this.activeKey !== 'jetpack_land') {
+        this.actions.jetpack_land.reset();
+        this.actions.jetpack_land.timeScale = 1.15;
+        this.playAction('jetpack_land', 0.14, true);
+      }
+    } else {
+      this.landAnimTimer = 0;
+    }
   }
 
   public update(
@@ -1185,7 +1236,9 @@ export class MixamoCharacterRig {
     usedJetpackThisAir: boolean = false,
     aimAngleWorld?: number,
     isManualAiming: boolean = false,
-    isHoverHanging: boolean = false
+    isHoverHanging: boolean = false,
+    slopePitch: number = 0,
+    slopeRoll: number = 0
   ) {
     this.jetpackClock += dt;
     if (aimAngleWorld !== undefined) {
@@ -1292,31 +1345,32 @@ export class MixamoCharacterRig {
           // Finish heroic jetpack touchdown recovery smoothly before blending into Idle
           break;
         }
-        this.playAction('idle', 0.16);
+        this.playAction('idle', 0.28);
         if (this.actions.idle) this.actions.idle.timeScale = 1.0;
         break;
 
       case PlayerState.WALK:
-        this.playAction('walk', 0.14);
+        this.playAction('walk', 0.22);
         if (this.actions.walk) {
-          this.actions.walk.timeScale = THREE.MathUtils.clamp(absVx / 4.2, 0.55, 1.55);
+          // 1:1 stride-matched walk cadence (eliminates foot sliding!)
+          this.actions.walk.timeScale = THREE.MathUtils.clamp(absVx / 2.6, 0.25, 1.95);
         }
         break;
 
       case PlayerState.CROUCH_WALK:
         if (this.actions.crouch_walk) {
-          this.playAction('crouch_walk', 0.12);
-          this.actions.crouch_walk.timeScale = THREE.MathUtils.clamp(absVx / 2.6, 0.55, 1.45);
+          this.playAction('crouch_walk', 0.18);
+          this.actions.crouch_walk.timeScale = THREE.MathUtils.clamp(absVx / 2.4, 0.25, 1.85);
         } else {
-          this.playAction('walk', 0.14);
+          this.playAction('walk', 0.20);
           if (this.actions.walk) this.actions.walk.timeScale = 0.7;
         }
         break;
 
       case PlayerState.RUN:
-        this.playAction('run', 0.12);
+        this.playAction('run', 0.22);
         if (this.actions.run) {
-          this.actions.run.timeScale = THREE.MathUtils.clamp(absVx / 7.8, 0.85, 1.55);
+          this.actions.run.timeScale = THREE.MathUtils.clamp(absVx / 6.2, 0.55, 1.85);
         }
         break;
 
@@ -1388,11 +1442,15 @@ export class MixamoCharacterRig {
       const fullAct = this.actions[this.activeKey];
       const lowerAct = this.lowerActions[this.activeKey];
       if (fullAct && lowerAct) {
-        // Silence any cross-fading full-body clips cleanly
+        // Silence any cross-fading full-body clips cleanly (stopFading prevents crossFadeTo from overriding weights inside mixer.update!)
         for (const k of Object.keys(this.actions) as AnimKey[]) {
           const a = this.actions[k];
-          if (a && k !== this.activeKey) a.setEffectiveWeight(0);
+          if (a && k !== this.activeKey) {
+            a.stopFading();
+            a.setEffectiveWeight(0);
+          }
         }
+        fullAct.stopFading();
         if (this.activeLowerKey !== this.activeKey) {
           this.stopAllLowerActions();
           lowerAct.reset();
@@ -1477,8 +1535,30 @@ export class MixamoCharacterRig {
       targetLean = THREE.MathUtils.clamp(-vy * 0.012, -0.12, 0.10);
     }
     this.leanPitch = THREE.MathUtils.lerp(this.leanPitch, targetLean, Math.min(1, dt * 11));
-    this.visualPivot.rotation.z = this.leanPitch;
-    this.visualPivot.position.set(0, 0, 0);
+    // TRUE TRIPLE-AAA NEXT-GEN SLOPE ALIGNMENT (Exact Mathematical Ramp Plane Match!):
+    // 1. visualPivot.rotation.z matches 100% of the ramp's forward slope angle (+30° uphill / -30° downhill)
+    //    so EVERY point along Jones's walking/running stride plane (dx = s*cos(θ), dy = s*sin(θ)) lies
+    //    MATHEMATICALLY ON THE EXACT 30° RAMP SURFACE (dy/dx = tan(30°)) -> ZERO foot penetration!
+    // 2. visualPivot.rotation.x is locked to 0 -> ZERO side-to-side swaying on the ramp!
+    // 3. Spine counter-pitches upright by -68% of the slope angle so Jones's upper torso & head stay
+    //    naturally vertical while his legs & boots climb the 30° slope flush with the tiles!
+    const rawSlope = isGrounded ? THREE.MathUtils.clamp(slopePitch, -0.65, 0.65) : 0;
+    this.slopePitchSmooth = THREE.MathUtils.lerp(this.slopePitchSmooth, rawSlope, Math.min(1, dt * 16));
+    this.slopeRollSmooth = 0;
+
+    const onSlope = Math.abs(this.slopePitchSmooth) > 0.03;
+    // On a slope, do NOT let sprint leanPitch dip the feet into the ramp!
+    this.visualPivot.rotation.z = onSlope ? this.slopePitchSmooth : this.leanPitch;
+    this.visualPivot.rotation.x = 0;
+    // Tiny +0.035m boot-sole clearance on slopes so toes never touch beneath the tile surface
+    this.visualPivot.position.set(0, onSlope ? 0.035 : 0, 0);
+
+    // Counter-pitch upper spine upright so Jones's torso/head stay naturally vertical while legs match 100% of the 30° ramp!
+    if (this.spineRootBone && Math.abs(this.slopePitchSmooth) > 0.01) {
+      // Mixamo Spine local +X pitches torso forward; positive slopePitchSmooth tilts visualPivot back, so pitch spine forward (+)
+      this._qFootSlope.setFromAxisAngle(this._footAxisX, this.slopePitchSmooth * 0.68);
+      this.spineRootBone.quaternion.multiply(this._qFootSlope);
+    }
 
     // 4b. Apply world-space straight-arm & parallel-barrel aim AFTER squash/stretch and leanPitch
     // so the shooting arm and Colt barrel stay 100% straight & horizontal in BOTH left & right directions!

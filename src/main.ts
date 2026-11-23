@@ -12,6 +12,8 @@ import { MeteorManager, MeteorType } from './entities/MeteorManager';
 import { EnemyBlob } from './entities/EnemyBlob';
 import { HangarCustomizer } from './ui/HangarCustomizer';
 import { JetpackModelId } from './entities/MixamoCharacterRig';
+import { Level2FreeRoam } from './level/Level2FreeRoam';
+import { MicroDebrisVFX } from './entities/MicroDebrisVFX';
 
 enum GameState {
   START,
@@ -29,6 +31,10 @@ class Game {
   private parallaxLayers: ParallaxLayers;
   private levelGenerator: LevelGenerator;
   private pixelPortalManager: PixelPortalManager;
+  private level2FreeRoam: Level2FreeRoam;
+  private level2EnemiesSpawned: boolean = false;
+  private microDebris: MicroDebrisVFX;
+  private level1Completed: boolean = false;
   private hangarCustomizer: HangarCustomizer;
   private hangarPixelStyle: boolean = true;
   private hangarJetpackBtnHeld: boolean = false;
@@ -111,6 +117,13 @@ class Game {
     this.hangarCustomizer = new HangarCustomizer(this.sceneManager.scene, this.sceneManager.renderer);
     this.hangarCustomizer.onLand = (impact) => this.audioManager.playGroundLanding(impact);
     this.hangarCustomizer.onCrtStatic = (dur) => this.audioManager.playCrtStaticNoise(dur);
+    this.level2FreeRoam = new Level2FreeRoam(this.sceneManager.scene);
+    this.microDebris = new MicroDebrisVFX(this.sceneManager.scene);
+    this.obstacleManager.onBulletImpact = (x, y, color) => {
+      if (this.levelGenerator.currentLevel !== 2) {
+        this.microDebris.burst(x, y, 0, color, -3.70, 0, 1, 1.0);
+      }
+    };
     this.meteorManager = new MeteorManager(this.sceneManager.scene);
     this.meteorManager.onSedimentWarning = () => {
       this.audioManager.playRadioCrackleSedimentWarning();
@@ -276,14 +289,32 @@ class Game {
     const levelBtn = document.getElementById('btn-level');
     if (levelBtn) {
       levelBtn.addEventListener('click', () => {
-        const nextLevel = (this.levelGenerator.currentLevel % 3) + 1;
+        const nextLevel = this.levelGenerator.currentLevel === 1 ? 2 : 1;
         this.switchLevel(nextLevel);
+      });
+    }
+
+    const camViewBtn = document.getElementById('btn-cam-view');
+    if (camViewBtn) {
+      camViewBtn.addEventListener('click', () => {
+        const mode = this.sceneManager.toggleLevel2CameraMode();
+        camViewBtn.textContent = mode === 'orthographic' ? '📐 ORTHO CAM [V]' : '🎥 3RD PERSON [V]';
+      });
+    }
+
+    const l2PixelBtn = document.getElementById('btn-l2-pixel');
+    if (l2PixelBtn) {
+      l2PixelBtn.addEventListener('click', () => {
+        const next = !this.sceneManager.pixelArtEnabled;
+        this.sceneManager.setPixelArtMode(next, true);
+        this.player.setPixelMode(next);
+        l2PixelBtn.textContent = next ? '👾 PIXEL: ON' : '👾 PIXEL: OFF';
       });
     }
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyL') {
-        const nextLevel = (this.levelGenerator.currentLevel % 3) + 1;
+        const nextLevel = this.levelGenerator.currentLevel === 1 ? 2 : 1;
         this.switchLevel(nextLevel);
       }
     });
@@ -295,6 +326,30 @@ class Game {
     this.state = GameState.START;
     this.inputManager.gameplayInputEnabled = false;
     this.sceneManager.cameraZoomOffset = 0;
+
+    // Always restore Level 1 in the Main Menu background with the exact default straight-on camera!
+    this.level1Completed = false;
+    this.sceneManager.setLevel(1);
+    this.levelGenerator.setLevel(1);
+    this.parallaxLayers.setLevel(1);
+    this.player.setFreeRoamAimMode(false);
+    this.parallaxLayers.group.visible = true;
+    this.pixelPortalManager.setVisible(true);
+    this.obstacleManager.setAllVisible(true);
+    this.level2FreeRoam.setVisible(false);
+    this.levelGenerator.setFinishGateVisible(true);
+    this.hangarCustomizer.runwayComputersGroup.visible = true;
+    this.sceneManager.setPixelArtMode(false, false);
+    this.player.setPixelMode(false);
+
+    const camViewBtn = document.getElementById('btn-cam-view');
+    if (camViewBtn) camViewBtn.style.display = 'none';
+    const l2PixelBtn = document.getElementById('btn-l2-pixel');
+    if (l2PixelBtn) {
+      l2PixelBtn.style.display = 'none';
+      l2PixelBtn.textContent = '👾 PIXEL: OFF';
+    }
+
     const menuEl = document.getElementById('main-menu-overlay');
     if (menuEl) menuEl.classList.remove('hidden');
     const hudEl = document.getElementById('hud');
@@ -307,8 +362,8 @@ class Game {
     if (reticleEl) reticleEl.style.display = 'none';
     this.hud.hideOverlay();
 
-    this.player.reset(0, -3.70);
-    this.sceneManager.camera.position.set(0, -1.8, this.sceneManager.baseZ);
+    this.player.reset(0, -3.70, 0);
+    this.sceneManager.resetLevel1Camera(0, -3.70);
   }
 
   public hideMainMenu() {
@@ -493,6 +548,8 @@ class Game {
     this.parallaxLayers.group.visible = false;
     this.pixelPortalManager.setVisible(false);
     this.obstacleManager.setAllVisible(false);
+    this.level2FreeRoam.setVisible(false);
+    this.levelGenerator.setFinishGateVisible(false);
 
     this.player.reset(0, -3.70);
     this.player.mesh.position.set(0, -3.70, 0);
@@ -514,12 +571,19 @@ class Game {
     this.hangarCustomizer.exit(this.sceneManager.keyLight, this.sceneManager.ambientLight);
     this.player.mesh.rotation.y = 0;
 
-    this.parallaxLayers.group.visible = true;
-    this.pixelPortalManager.setVisible(true);
-    this.obstacleManager.setAllVisible(true);
+    const isL2 = this.levelGenerator.currentLevel === 2;
+    this.parallaxLayers.group.visible = !isL2;
+    this.pixelPortalManager.setVisible(!isL2);
+    this.obstacleManager.setAllVisible(!isL2);
+    this.level2FreeRoam.setVisible(isL2);
+    this.levelGenerator.setFinishGateVisible(!isL2);
     this.sceneManager.setPixelArtMode(false, false);
     this.sceneManager.setDepthOfField(false);
     this.player.setPixelMode(false);
+
+    if (!isL2) {
+      this.sceneManager.resetLevel1Camera(0, -3.70);
+    }
 
     if (launchGame) {
       this.startGame();
@@ -767,40 +831,64 @@ class Game {
   }
 
   public switchLevel(lvl: number) {
+    this.level1Completed = false;
     this.sceneManager.setLevel(lvl);
     this.levelGenerator.setLevel(lvl);
     this.parallaxLayers.setLevel(lvl);
     this.player.isIsometric = false;
-    this.player.reset(0, -3.70, 0);
+
+    const isLevel2 = lvl === 2;
+    this.player.setFreeRoamAimMode(isLevel2);
+    this.parallaxLayers.group.visible = !isLevel2;
+    this.pixelPortalManager.setVisible(!isLevel2);
+    this.obstacleManager.setAllVisible(!isLevel2);
+    this.level2FreeRoam.setVisible(isLevel2);
+    this.levelGenerator.setFinishGateVisible(!isLevel2);
+    this.hangarCustomizer.runwayComputersGroup.visible = !isLevel2;
+
+    // Hold Level 2 enemies back until Jones explores past x >= 21.5 (after Conveyor & 30° Ramp!)
+    this.level2EnemiesSpawned = false;
+
+    // Spawn Jones directly on the Moving Conveyor Belt in Level 2 (y = -3.56, z = 0)!
+    this.player.reset(0, isLevel2 ? -3.56 : -3.70, 0);
     this.score = 0;
+
+    const camViewBtn = document.getElementById('btn-cam-view');
+    if (camViewBtn) {
+      camViewBtn.style.display = isLevel2 ? '' : 'none';
+      camViewBtn.textContent = this.sceneManager.level2CamMode === 'orthographic'
+        ? '📐 ORTHO CAM [V]'
+        : '🎥 3RD PERSON [V]';
+    }
+    const l2PixelBtn = document.getElementById('btn-l2-pixel');
+    if (l2PixelBtn) {
+      l2PixelBtn.style.display = isLevel2 ? '' : 'none';
+      l2PixelBtn.textContent = this.sceneManager.pixelArtEnabled ? '👾 PIXEL: ON' : '👾 PIXEL: OFF';
+    }
+    if (!isLevel2) {
+      this.sceneManager.resetLevel1Camera(0, -3.70);
+    }
 
     const levelBtn = document.getElementById('btn-level');
     if (levelBtn) {
       if (lvl === 1) {
-        levelBtn.textContent = '🪐 LEVEL 2: ALIEN [L]';
+        levelBtn.textContent = '🪐 LEVEL 2: 3D FREE ROAM [L]';
+        levelBtn.style.color = '#38d2ff';
+        levelBtn.style.borderColor = '#2574e8';
+      } else {
+        levelBtn.textContent = '🏭 LEVEL 1: RUNWAY [L]';
         levelBtn.style.color = '#39ff14';
         levelBtn.style.borderColor = '#39ff14';
-      } else if (lvl === 2) {
-        levelBtn.textContent = '🔴 LEVEL 3: MARS [L]';
-        levelBtn.style.color = '#ff6633';
-        levelBtn.style.borderColor = '#ff6633';
-      } else {
-        levelBtn.textContent = '🏭 LEVEL 1: COMPLEX [L]';
-        levelBtn.style.color = '#ffaa00';
-        levelBtn.style.borderColor = '#ffaa00';
       }
     }
 
     const optLevelBtn = document.getElementById('opt-level-btn');
     if (optLevelBtn) {
-      if (lvl === 1) optLevelBtn.textContent = '🏭 LEVEL 1: INDUSTRIAL';
-      else if (lvl === 2) optLevelBtn.textContent = '🪐 LEVEL 2: ALIEN WORLD';
-      else optLevelBtn.textContent = '🔴 LEVEL 3: DESOLATE MARS';
+      optLevelBtn.textContent = isLevel2 ? '🚀 LEVEL 2: 3D FREE ROAM' : '🏭 LEVEL 1: INDUSTRIAL';
     }
 
-    let levelName = 'INDUSTRIAL COMPLEX';
-    if (lvl === 2) levelName = 'PLANET XYLOS (ALIEN WORLD)';
-    if (lvl === 3) levelName = 'DESOLATE MARS (RED PLANET)';
+    let levelName = 'LEVEL 1: INDUSTRIAL RUNWAY';
+    if (isLevel2) levelName = 'LEVEL 2: 3D FREE ROAM · CONVEYOR & 30° RAMP [V: CAM]';
     this.showUpgradeBanner(`★ SWITCHED TO ${levelName} ★`);
   }
 
@@ -849,6 +937,17 @@ class Game {
     this.player.reset(0, -3.70); // Start in idle on solid ground
     this.levelGenerator.reset(0);
     this.pixelPortalManager.reset(0);
+    if (this.levelGenerator.currentLevel === 1) {
+      const staticBlockers = this.obstacleManager.obstacles
+        .filter((obs) => obs.active && obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL)
+        .map((obs) => ({
+          x: obs.group.position.x,
+          y: obs.group.position.y,
+          halfW: obs.collider.halfSize ? obs.collider.halfSize.x : (obs.collider.radius ?? 0.8),
+          halfH: obs.collider.halfSize ? obs.collider.halfSize.y : (obs.collider.radius ?? 0.8)
+        }));
+      this.pixelPortalManager.ensureClearOfPlatforms(this.obstacleManager.getPlatforms(), staticBlockers, -9999);
+    }
     this.sceneManager.setPixelArtMode(false, false);
     this.player.setPixelMode(false);
     this.meteorManager.reset();
@@ -961,7 +1060,8 @@ class Game {
     const dt = rawDt * timeScale;
     const totalTime = this.clock.getElapsedTime();
 
-    this.inputManager.update();
+    const isLevel2 = this.state === GameState.PLAYING && this.levelGenerator.currentLevel === 2;
+    this.inputManager.update(isLevel2);
     // Project mouse cursor to 3D world plane
     this.inputManager.updateAimWorldTarget(
       this.sceneManager.camera,
@@ -994,6 +1094,16 @@ class Game {
         if (camBtn) camBtn.textContent = enabled ? '🎥 CAM: ON [H]' : '🎥 CAM: OFF [H]';
       }
 
+      // Level 2 Camera Mode Toggle ([V] key: 3rd Person <-> Orthographic!)
+      if (isLevel2 && this.inputManager.consumeCameraViewToggleTrigger()) {
+        const mode = this.sceneManager.toggleLevel2CameraMode();
+        const camViewBtn = document.getElementById('btn-cam-view');
+        if (camViewBtn) {
+          camViewBtn.textContent = mode === 'orthographic' ? '📐 ORTHO CAM [V]' : '🎥 3RD PERSON [V]';
+        }
+        this.showUpgradeBanner(mode === 'orthographic' ? '📐 ORTHOGRAPHIC CAMERA ACTIVE' : '🎥 3RD-PERSON FOLLOW CAMERA ACTIVE');
+      }
+
       // Force Field Toggle ([B] key)
       if (this.inputManager.consumeShieldTrigger()) {
         this.toggleForcefield();
@@ -1010,6 +1120,111 @@ class Game {
 
       // 3. Update Player Entity
       const jumpPressed = this.inputManager.consumeJumpTrigger();
+      const slidePressed = this.inputManager.consumeSlideTrigger();
+      if (isLevel2) {
+        // LEVEL 2: NEXT-GEN 3D FREE-ROAM + CONVEYOR BELT + 30° RAMP + TIGHT WALLS + REAL SHADOWS + TEST DRONES!
+        this.level2FreeRoam.update(dt);
+        this.obstacleManager.update(dt, totalTime, this.player.position.x, this.player.position.y);
+        const camYaw = this.sceneManager.level2CamMode === 'orthographic'
+          ? Math.PI * 0.25
+          : this.sceneManager.level2OrbitYaw;
+        this.player.updateFreeRoam3D(
+          dt,
+          this.inputManager.moveX,
+          this.inputManager.moveZ,
+          this.inputManager.run,
+          jumpPressed,
+          this.inputManager.jetpack,
+          this.inputManager.crouch,
+          this.inputManager.jumpHeld,
+          this.inputManager.jetpackThrottle,
+          this.inputManager.jetpackDirectTrigger,
+          (px, py, pz, nx, nz, r) => this.level2FreeRoam.resolveHorizontalAndSurface(px, py, pz, nx, nz, r),
+          camYaw,
+          slidePressed
+        );
+        // Spawn Level 2 test drone squadron once Jones advances past the 30° ramp (x >= 21.5)!
+        if (!this.level2EnemiesSpawned && this.player.position.x >= 21.5) {
+          this.level2EnemiesSpawned = true;
+          this.showUpgradeBanner('⚠️ ALIEN DRONE SQUADRON INBOUND!');
+          this.obstacleManager.spawnDrone(32.0, 1.2, 4.0);
+          this.obstacleManager.spawnDrone(38.0, 0.6, 3.8);
+          this.obstacleManager.spawnDrone(35.0, 2.2, 4.2);
+          this.obstacleManager.spawnDrone(42.0, 1.4, 3.5);
+          if (this.obstacleManager.drones[0]) this.obstacleManager.drones[0].position.z = -3.2;
+          if (this.obstacleManager.drones[1]) this.obstacleManager.drones[1].position.z = 0.0;
+          if (this.obstacleManager.drones[2]) this.obstacleManager.drones[2].position.z = 3.4;
+          if (this.obstacleManager.drones[3]) this.obstacleManager.drones[3].position.z = -1.2;
+        }
+
+        // Check 3D bullet hits against Level 2 surfaces (Floor, Conveyor, 30° Ramp, Deck) AND Drones -> Micro-Debris Explosion!
+        for (const laser of this.player.lasers) {
+          if (!laser.active) continue;
+          const lSurf = this.level2FreeRoam.getSurfaceInfo(laser.position.x, laser.position.z, 0.05);
+          if (laser.position.y <= lSurf.height + 0.06) {
+            laser.active = false;
+            laser.mesh.visible = false;
+            this.microDebris.burst(laser.position.x, lSurf.height + 0.04, laser.position.z, 0x38d2ff, lSurf.height, 0, 1, 1.05);
+            continue;
+          }
+          for (const drone of this.obstacleManager.drones) {
+            if (!drone.active) continue;
+            const d3 = laser.position.distanceTo(drone.position);
+            if (d3 < 1.15) {
+              laser.active = false;
+              laser.mesh.visible = false;
+              this.obstacleManager.spawnBulletImpact(laser.position.x, laser.position.y, 0x00f5ff);
+              this.microDebris.burst(laser.position.x, laser.position.y, laser.position.z, 0xff7f2a, lSurf.height, -Math.sign(laser.velocity.x), 0.7, 1.2);
+              this.audioManager.playEnemyImpact();
+              const killed = drone.takeDamage(1);
+              if (killed) {
+                this.microDebris.burst(drone.position.x, drone.position.y, drone.position.z, 0xffaa22, lSurf.height, 0, 1, 1.8);
+                this.audioManager.playExplosion();
+                this.sceneManager.triggerShake(0.32, 0.22);
+                this.score += 300;
+              }
+              break;
+            }
+          }
+        }
+        // Check Alien Drone lasers hitting Level 2 surfaces -> fiery crimson micro-debris!
+        for (const drone of this.obstacleManager.drones) {
+          for (const rLaser of drone.lasers) {
+            if (!rLaser.active) continue;
+            const dSurf = this.level2FreeRoam.getSurfaceInfo(rLaser.position.x, rLaser.position.z, 0.05);
+            if (rLaser.position.y <= dSurf.height + 0.06) {
+              rLaser.active = false;
+              rLaser.mesh.visible = false;
+              this.microDebris.burst(rLaser.position.x, dSurf.height + 0.04, rLaser.position.z, 0xff2244, dSurf.height, 0, 1, 1.15);
+            }
+          }
+        }
+        this.microDebris.update(dt);
+        // Left-Mouse Drag + Gamepad Right-Stick rotate the Level 2 camera around Jones!
+        const mouseOrbit = this.inputManager.consumeMouseOrbitDelta();
+        if (mouseOrbit.dx !== 0 || mouseOrbit.dy !== 0) {
+          this.sceneManager.level2OrbitYaw -= mouseOrbit.dx * 0.008;
+          this.sceneManager.level2OrbitPitch = THREE.MathUtils.clamp(
+            this.sceneManager.level2OrbitPitch + mouseOrbit.dy * 0.006,
+            0.08,
+            0.72
+          );
+        }
+        const rsX = this.inputManager.hasGamepadAim ? this.inputManager.rightStickAimX : 0;
+        const rsY = this.inputManager.hasGamepadAim ? this.inputManager.rightStickAimY : 0;
+        this.sceneManager.updateCameraFreeRoam(
+          this.player.position.x,
+          this.player.position.y,
+          this.player.position.z,
+          dt,
+          rsX,
+          rsY
+        );
+        this.hud.update(this.score, this.player.life, this.player.fuel);
+        this.sceneManager.render(false);
+        return;
+      }
+
       const platforms = this.obstacleManager.getPlatforms();
 
       // Determine if Jones is under fire or under pressure for antennae radio signals
@@ -1049,7 +1264,8 @@ class Game {
         this.inputManager.jumpHeld,
         this.inputManager.jetpackThrottle,
         this.inputManager.jetpackDirectTrigger,
-        false
+        false,
+        slidePressed
       );
 
       // Update Falling Meteor & Shatter Shrapnel System
@@ -1060,31 +1276,30 @@ class Game {
         (type) => this.audioManager.playMeteorShatter(type === MeteorType.CRYSTAL)
       );
 
-      // 4. Update Level, Pixel Portals (guaranteed unobstructed by ALL platforms, obstacles & crates!), Obstacles & Enemies
+      // 4. Update Level, Pixel Portals (doors stay 100% FIXED after initial level load — ZERO mid-level teleporting!)
       this.levelGenerator.update(this.player.position.x);
-      const doorBlockers: { x: number; y: number; halfW: number; halfH: number }[] = [];
-      for (const obs of this.obstacleManager.obstacles) {
-        if (!obs.active) continue;
-        const hw = obs.collider.halfSize ? obs.collider.halfSize.x : (obs.collider.radius ?? 0.8);
-        const hh = obs.collider.halfSize ? obs.collider.halfSize.y : (obs.collider.radius ?? 0.8);
-        doorBlockers.push({ x: obs.group.position.x, y: obs.group.position.y, halfW: hw, halfH: hh });
-      }
-      for (const cr of this.obstacleManager.crates) {
-        if (!cr.active || cr.isDestroyed) continue;
-        doorBlockers.push({ x: cr.position.x, y: cr.position.y, halfW: cr.halfW, halfH: cr.halfH });
-      }
-      this.pixelPortalManager.ensureClearOfPlatforms(platforms, doorBlockers);
       this.pixelPortalManager.update(dt, totalTime, this.player.position.x, this.player.position.y);
       this.obstacleManager.update(dt, totalTime, this.player.position.x, this.player.position.y);
       this.parallaxLayers.update(this.player.position.x, this.player.position.y, totalTime);
       this.hangarCustomizer.update(dt, totalTime, this.player.position.x);
 
-      // 5. Collision Checks
+      // 5. Collision Checks & Micro-Debris Shader Simulation
       this.checkCollisions(dt);
+      this.microDebris.update(dt);
 
-      // 6. Score tracking
+      // 6. Score tracking & Level 1 Finish Gate Trigger (x >= 120m -> launches Level 2 3D Free-Roam!)
       if (this.player.position.x * 10 > this.score) {
         this.score = Math.floor(this.player.position.x * 10);
+      }
+      if (this.levelGenerator.currentLevel === 1 && !this.level1Completed && this.player.position.x >= this.levelGenerator.level1EndX) {
+        this.level1Completed = true;
+        this.audioManager.playPortalWarp(true);
+        this.showUpgradeBanner('🏆 LEVEL 1 COMPLETE! LAUNCHING LEVEL 2 — 3D FREE ROAM!');
+        setTimeout(() => {
+          if (this.state === GameState.PLAYING && this.levelGenerator.currentLevel === 1) {
+            this.switchLevel(2);
+          }
+        }, 1250);
       }
 
       // 7. Check Player Death Animation & Game Over Transition
@@ -1102,7 +1317,7 @@ class Game {
       const rsY = this.inputManager.hasGamepadAim ? this.inputManager.rightStickAimY : 0;
       this.hangarCustomizer.update(dt, totalTime, 0, this.player.mesh, this.sceneManager.camera, isHovering, rsX, rsY);
       this.player.updateHangarShowcase(dt, isHovering, this.hangarCustomizer.hoverHeight);
-      this.sceneManager.render();
+      this.sceneManager.render(true);
       return;
     } else {
       // Idle scene animation on start screen
@@ -1717,49 +1932,62 @@ class Game {
     this.lockOnMesh.visible = false;
     this.sceneManager.scene.add(this.lockOnMesh);
 
-    // 1. Outer Pulsating Neon Amber Ring
-    const outerRingGeo = new THREE.RingGeometry(0.68, 0.74, 32);
-    const outerRingMat = new THREE.MeshBasicMaterial({
-      color: 0xff3300,
-      side: THREE.DoubleSide,
+    // Distinct Tactical Sunset-Amber/Crimson Fresnel Pulse Sphere (completely different from Jones's cyan geodesic bubble!)
+    const lockOrbGeo = new THREE.SphereGeometry(0.64, 24, 18);
+    const lockOrbMat = new THREE.ShaderMaterial({
       transparent: true,
-      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.FrontSide,
+      uniforms: {
+        uColorInner: { value: new THREE.Color(0xff4422) },
+        uColorRim: { value: new THREE.Color(0xffb833) }
+      },
+      vertexShader: `
+        varying vec3 vNormalW;
+        varying vec3 vViewDir;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vNormalW = normalize(mat3(modelMatrix) * normal);
+          vViewDir = normalize(cameraPosition - wp.xyz);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        uniform vec3 uColorInner;
+        uniform vec3 uColorRim;
+        varying vec3 vNormalW;
+        varying vec3 vViewDir;
+        void main() {
+          float ndotv = max(0.0, dot(normalize(vNormalW), normalize(vViewDir)));
+          float fresnel = pow(1.0 - ndotv, 2.6);
+          vec3 col = mix(uColorInner, uColorRim, fresnel);
+          float alpha = fresnel * 0.72 + 0.04;
+          gl_FragColor = vec4(col * 1.35, alpha);
+        }
+      `
     });
-    const outerRing = new THREE.Mesh(outerRingGeo, outerRingMat);
-    this.lockOnMesh.add(outerRing);
+    lockOrbMat.customProgramCacheKey = () => 'TacticalLockOnSphereV1';
+    this.lockOnMesh.add(new THREE.Mesh(lockOrbGeo, lockOrbMat));
 
-    // 2. Inner Rapid Pulsing Circle
-    const innerRingGeo = new THREE.RingGeometry(0.46, 0.50, 24);
-    const innerRingMat = new THREE.MeshBasicMaterial({
-      color: 0xffaa00,
-      side: THREE.DoubleSide,
+    // Twin sleek opposing precision arc crescents orbiting the target sphere
+    const arcGeo = new THREE.TorusGeometry(0.72, 0.018, 8, 24, Math.PI * 0.65);
+    const arcMat = new THREE.MeshBasicMaterial({
+      color: 0xffaa22,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.82,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
-    const innerRing = new THREE.Mesh(innerRingGeo, innerRingMat);
-    this.lockOnMesh.add(innerRing);
+    const arcA = new THREE.Mesh(arcGeo, arcMat);
+    arcA.rotation.x = Math.PI * 0.35;
+    this.lockOnMesh.add(arcA);
 
-    // 3. Four Sci-Fi Crosshair Corner Brackets
-    const bracketGeoH = new THREE.BoxGeometry(0.20, 0.035, 0.02);
-    const bracketGeoV = new THREE.BoxGeometry(0.035, 0.20, 0.02);
-    const bracketMat = new THREE.MeshBasicMaterial({ color: 0x00f5ff });
-
-    const bracketPositions = [
-      [0.60, 0.60],
-      [-0.60, 0.60],
-      [0.60, -0.60],
-      [-0.60, -0.60],
-    ];
-
-    for (const [bx, by] of bracketPositions) {
-      const bH = new THREE.Mesh(bracketGeoH, bracketMat);
-      bH.position.set(bx, by, 0);
-      this.lockOnMesh.add(bH);
-
-      const bV = new THREE.Mesh(bracketGeoV, bracketMat);
-      bV.position.set(bx, by, 0);
-      this.lockOnMesh.add(bV);
-    }
+    const arcB = new THREE.Mesh(arcGeo, arcMat);
+    arcB.rotation.x = -Math.PI * 0.35;
+    arcB.rotation.z = Math.PI;
+    this.lockOnMesh.add(arcB);
 
     // Next-Gen Triple-AAA Holographic Raycast Targeting Laser Beam (Colt Barrel -> Locked Target)
     this.rayBeamGroup = new THREE.Group();
@@ -1903,58 +2131,63 @@ class Game {
       return;
     }
 
+    const isL2 = this.levelGenerator.currentLevel === 2;
     const originX = this.player.position.x;
     const originY = this.player.position.y + 1.48;
+    const originZ = this.player.position.z;
     const lookDir = this.player.facingRight ? 1 : -1;
-    const platforms = this.obstacleManager.getPlatforms();
+    const platforms = isL2 ? [] : this.obstacleManager.getPlatforms();
 
-    const maxForwardRange = 21.0;
-    const maxBehindRange = 7.5; // Still detects close drones diving behind Jones!
+    const maxForwardRange = isL2 ? 56.0 : 44.0;
+    const maxBehindRange = isL2 ? 56.0 : 18.0;
 
     let closestEnemy: any = null;
     let bestScore = Infinity;
     let bestPosX = 0;
     let bestPosY = 0;
+    let bestPosZ = 0;
 
-    const evaluateCandidate = (cand: any, tx: number, ty: number, priorityBias: number = 0) => {
+    const evaluateCandidate = (cand: any, tx: number, ty: number, tz: number = 0, priorityBias: number = 0) => {
       const dx = tx - originX;
       const dy = ty - originY;
-      const dist = Math.hypot(dx, dy);
-      const inFront = dx * lookDir >= -0.6;
+      const dz = tz - originZ;
+      const dist = Math.hypot(dx, dy, dz);
+      const inFront = isL2 ? true : (dx * lookDir >= -0.6);
       const maxRange = inFront ? maxForwardRange : maxBehindRange;
       if (dist > maxRange || dist < 0.35) return;
 
-      // Prefer targets in front of Jones, sorted by closest Euclidean distance
       const score = dist + (inFront ? 0 : 4.5) + priorityBias;
       if (score >= bestScore) return;
 
-      // True Raycast Line-of-Sight check against all solid platforms & barriers!
-      if (!this.hasClearRaycastLineOfSight(originX, originY, tx, ty, platforms)) return;
+      if (!isL2 && !this.hasClearRaycastLineOfSight(originX, originY, tx, ty, platforms)) return;
 
       bestScore = score;
       closestEnemy = cand;
       bestPosX = tx;
       bestPosY = ty;
+      bestPosZ = tz;
     };
 
     for (const drone of this.obstacleManager.drones) {
       if (!drone.active) continue;
-      evaluateCandidate(drone, drone.position.x, drone.position.y, -0.5);
+      evaluateCandidate(drone, drone.position.x, drone.position.y, drone.position.z, -0.5);
     }
 
-    for (const enemy of this.obstacleManager.enemies) {
-      if (!enemy.active) continue;
-      evaluateCandidate(enemy, enemy.position.x, enemy.position.y + 0.45, 0);
-    }
+    if (!isL2) {
+      for (const enemy of this.obstacleManager.enemies) {
+        if (!enemy.active) continue;
+        evaluateCandidate(enemy, enemy.position.x, enemy.position.y + 0.45, 0, 0);
+      }
 
-    for (const obs of this.obstacleManager.obstacles) {
-      if (!obs.active || obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL) continue;
-      evaluateCandidate(obs, obs.group.position.x, obs.group.position.y + 0.65, 0);
-    }
+      for (const obs of this.obstacleManager.obstacles) {
+        if (!obs.active || obs.type !== ObstacleType.ALIEN_CYBER_SENTINEL) continue;
+        evaluateCandidate(obs, obs.group.position.x, obs.group.position.y + 0.65, 0, 0);
+      }
 
-    for (const crate of this.obstacleManager.crates) {
-      if (!crate.active || crate.isDestroyed) continue;
-      evaluateCandidate(crate, crate.position.x, crate.position.y, 2.0); // Slight priority behind live enemies
+      for (const crate of this.obstacleManager.crates) {
+        if (!crate.active || crate.isDestroyed) continue;
+        evaluateCandidate(crate, crate.position.x, crate.position.y, 0, 2.0);
+      }
     }
 
     if (this.rayBeamFlashTimer > 0) {
@@ -1963,14 +2196,16 @@ class Game {
 
     if (closestEnemy) {
       this.lockedEnemy = closestEnemy;
-      this.inputManager.mouseWorldTarget.set(bestPosX, bestPosY, 0);
+      this.inputManager.mouseWorldTarget.set(bestPosX, bestPosY, bestPosZ);
 
-      this.lockOnMesh.position.set(bestPosX, bestPosY, 0.40);
-      this.lockOnMesh.rotation.z += dt * 3.2;
+      // Smoothly snap subtle pulsing lock-on sphere directly around the enemy!
+      this.lockOnMesh.position.lerp(new THREE.Vector3(bestPosX, bestPosY, bestPosZ), Math.min(1, dt * 22.0));
+      this.lockOnMesh.rotation.y += dt * 2.2;
+      this.lockOnMesh.rotation.x += dt * 1.1;
 
       this.lockOnMesh.visible = true;
-      const pulse = 1.0 + Math.sin(totalTime * 14.0) * 0.12;
-      this.lockOnMesh.scale.set(pulse, pulse, 1.0);
+      const pulse = 0.96 + Math.sin(totalTime * 9.0) * 0.08;
+      this.lockOnMesh.scale.setScalar(pulse);
 
       // Show Next-Gen Triple-AAA Raycast Laser Beam ONLY when the player presses Shoot!
       if (this.rayBeamGroup) {

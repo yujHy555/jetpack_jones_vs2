@@ -3,12 +3,105 @@ import { ObstacleManager } from './Obstacles';
 
 export class LevelGenerator {
   private obstacleManager: ObstacleManager;
+  private scene?: THREE.Scene;
   public currentLevel: number = 1;
+  public readonly level1EndX: number = 120;
+  private level1FinishGate: THREE.Group | null = null;
   private nextSpawnX: number = 22;
   private spawnInterval: number = 22; // Generous spacious rhythm between all scene elements!
 
   constructor(obstacleManager: ObstacleManager, scene?: THREE.Scene) {
     this.obstacleManager = obstacleManager;
+    this.scene = scene;
+    if (scene) {
+      this.level1FinishGate = this.buildLevel1FinishGate();
+      this.level1FinishGate.position.set(this.level1EndX, -3.70, 0);
+      scene.add(this.level1FinishGate);
+    }
+  }
+
+  public setFinishGateVisible(visible: boolean) {
+    if (this.level1FinishGate) this.level1FinishGate.visible = visible && this.currentLevel === 1;
+  }
+
+  private buildLevel1FinishGate(): THREE.Group {
+    const g = new THREE.Group();
+    g.name = 'Level1FinishGate';
+
+    const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe6eff8, metalness: 0.9, roughness: 0.16 });
+    const brownMat = new THREE.MeshStandardMaterial({ color: 0x5c3622, metalness: 0.35, roughness: 0.45 });
+    const limeGlow = new THREE.MeshBasicMaterial({ color: 0xa6ff38 });
+    const orangeGlow = new THREE.MeshBasicMaterial({ color: 0xff7f2a });
+
+    const h = 4.6;
+    const d = 2.6;
+    for (const zo of [-d * 0.5, d * 0.5]) {
+      const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.42, h, 0.42), chromeMat);
+      pillar.position.set(0, h * 0.5, zo);
+      g.add(pillar);
+
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.46, h - 0.5, 0.12), limeGlow);
+      stripe.position.set(0, h * 0.5, zo);
+      g.add(stripe);
+
+      const base = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.3, 0.8), brownMat);
+      base.position.set(0, 0.15, zo);
+      g.add(base);
+    }
+
+    const header = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.55, d + 0.8), chromeMat);
+    header.position.set(0, h + 0.25, 0);
+    g.add(header);
+
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.70, 0.16, d + 0.6), orangeGlow);
+    beam.position.set(0, h + 0.25, 0);
+    g.add(beam);
+
+    // Glowing Finish Signboard ("SECTOR 1 FINISH -> LEVEL 2")
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#140c16';
+    ctx.fillRect(0, 0, 512, 128);
+    ctx.strokeStyle = '#a6ff38';
+    ctx.lineWidth = 8;
+    ctx.strokeRect(6, 6, 500, 116);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#a6ff38';
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText('★ LEVEL 1 FINISH ★', 256, 46);
+    ctx.fillStyle = '#ff9e44';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText('ENTER GATE → LEVEL 2 (3D FREE ROAM)', 256, 88);
+
+    const signTex = new THREE.CanvasTexture(canvas);
+    signTex.colorSpace = THREE.SRGBColorSpace;
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.8, 0.95),
+      new THREE.MeshBasicMaterial({ map: signTex, side: THREE.DoubleSide })
+    );
+    sign.position.set(0, h + 1.15, 0.2);
+    g.add(sign);
+
+    // Translucent golden-lime finish energy curtain
+    const curtain = new THREE.Mesh(
+      new THREE.PlaneGeometry(d - 0.2, h - 0.2),
+      new THREE.MeshBasicMaterial({
+        color: 0xa6ff38,
+        transparent: true,
+        opacity: 0.24,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      })
+    );
+    curtain.rotation.y = Math.PI / 2;
+    curtain.position.set(0, h * 0.5, 0);
+    g.add(curtain);
+
+    return g;
   }
 
   public setLevel(lvl: number) {
@@ -19,6 +112,14 @@ export class LevelGenerator {
   public reset(startX: number = 0) {
     this.obstacleManager.clear();
     this.nextSpawnX = startX + 22;
+    if (this.level1FinishGate) {
+      this.level1FinishGate.visible = this.currentLevel === 1;
+    }
+
+    if (this.currentLevel === 2) {
+      // Level 2 is now the dedicated 3D Free-Roam Sandbox (Level2FreeRoam.ts) — no legacy 2D obstacles!
+      return;
+    }
 
     if (this.currentLevel === 1) {
       // ----------------------------------------------------
@@ -79,10 +180,20 @@ export class LevelGenerator {
       // Supply Crate
       this.obstacleManager.spawnCrate(7.0, -1.3);
     }
+
+    // Pre-generate the entire finite Level 1 (0..120m) ONCE at level load so ZERO elements
+    // ever pop in, shift, or teleport while the player is playing Level 1!
+    if (this.currentLevel === 1) {
+      this.update(this.level1EndX);
+    }
   }
 
   public update(playerX: number) {
-    while (this.nextSpawnX < playerX + 65) {
+    // Level 2 uses dedicated 3D Free-Roam stage (Level2FreeRoam.ts)
+    if (this.currentLevel === 2) return;
+
+    const maxSpawnX = this.currentLevel === 1 ? (this.level1EndX - 14) : Infinity;
+    while (this.nextSpawnX < playerX + 65 && this.nextSpawnX <= maxSpawnX) {
       // Keep the opening 0..48m runway clean of enemies so player can test movement & Pixel Portals first!
       const allowEnemies = this.nextSpawnX >= 48;
       const origSpawnDrone = this.obstacleManager.spawnDrone.bind(this.obstacleManager);
@@ -153,18 +264,14 @@ export class LevelGenerator {
         break;
 
       case 3:
-        // DOUBLE AAA SCI-FI GRAV-ROTORS + OVERHEAD CATWALK
-        this.obstacleManager.spawnGear(x - 2, -2.5, 2.0, -1.4);
-        this.obstacleManager.spawnGear(x + 4, -2.5, 2.0, 1.4);
-        this.obstacleManager.spawnPlatform(x + 1, 1.2, 5.5, 0.5);
-        // Collectibles safely placed above wheels: zero intersection, easily reachable by jump/flight!
-        this.obstacleManager.spawnCoinPickup(x - 2.0, 0.60);
-        this.obstacleManager.spawnCoinPickup(x + 4.0, 0.60);
-        // Safe running collectibles on top of the catwalk platform (surface at y = 1.45)
-        this.spawnCoinLine(x - 0.5, 1.95, 3);
-        this.obstacleManager.spawnFuelPickup(x + 1, 3.2);
-        this.obstacleManager.spawnFuelPickup(x + 1, 9.0);
-        this.obstacleManager.spawnDrone(x + 1, 3.8, 3.5);
+        // ELEVATED STEPPED RUNWAY + SKY COLLECTIBLES (Spike circles removed per user request!)
+        this.obstacleManager.spawnPlatform(x - 2, -1.6, 4.8, 0.5);
+        this.obstacleManager.spawnPlatform(x + 3.5, 0.6, 5.2, 0.5);
+        this.spawnCoinLine(x - 3.0, -0.6, 3);
+        this.spawnCoinLine(x + 2.0, 1.5, 3);
+        this.obstacleManager.spawnFuelPickup(x + 3.5, 2.8);
+        this.obstacleManager.spawnFuelPickup(x + 3.5, 8.5);
+        this.obstacleManager.spawnDrone(x + 3.5, 3.6, 3.5);
         break;
 
       case 4:

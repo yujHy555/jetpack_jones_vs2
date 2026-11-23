@@ -1014,40 +1014,22 @@ export class ParallaxLayers {
       o.group.position.y = o.baseY - alt * 0.16;
     }
 
-    // 4. Foreground Seamless Catwalk Bridge Leapfrogging (Infinite Ground at Y = -3.70)
+    // 4. Foreground Seamless Catwalk Bridge (wide 200m static span — only wraps > 135m off-screen!)
     const tileWidth = 40;
     const tileCount = this.floorTiles.length;
-    const halfSpan = (tileCount * tileWidth) / 2;
+    const wrapMargin = (tileCount * tileWidth) / 2 + 35;
 
     for (let i = 0; i < tileCount; i++) {
       const floorTile = this.floorTiles[i];
-      if (floorTile.position.x < playerX - halfSpan) {
+      if (floorTile.position.x < playerX - wrapMargin) {
         floorTile.position.x += tileCount * tileWidth;
-      } else if (floorTile.position.x > playerX + halfSpan) {
+      } else if (floorTile.position.x > playerX + wrapMargin) {
         floorTile.position.x -= tileCount * tileWidth;
       }
     }
 
-    // 5. Foreground Consoles Leapfrogging (guaranteed clear around start X=0!) + Live GPU Micro-Animated CRT Screens
-    const cSpan = 64;
-    const cCount = this.foregroundConsoles.length;
-    const cTotal = cSpan * cCount;
-
-    for (let i = 0; i < cCount; i++) {
-      const con = this.foregroundConsoles[i];
-      const basePos = 24 + i * cSpan;
-      const relX = ((basePos - playerX + cTotal * 0.5) % cTotal + cTotal) % cTotal - cTotal * 0.5;
-      con.position.x = playerX + relX;
-    }
-
-    // 6. 1979 Retro-Space Foreground Parallax Props (faster 1.18x cinematic foreground depth!)
-    const fgTotal = 128;
-    for (const p of this.foreground1979Props) {
-      const shifted = p.baseX - playerX * 1.18;
-      const relX = ((shifted + fgTotal * 0.5) % fgTotal + fgTotal) % fgTotal - fgTotal * 0.5;
-      p.group.position.x = playerX + relX;
-    }
-
+    // 5 & 6. Foreground Consoles & 1979 Retro-Space Props stay 100% FIXED at their world coordinates
+    // (ZERO sliding, ZERO wrapping, ZERO teleporting while playing the level!)
     for (const mat of this.crtScreenMats) {
       mat.uniforms.uTime.value = time;
     }

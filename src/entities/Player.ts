@@ -216,7 +216,331 @@ export class Player {
     this.jetpackVfx?.setPixelMode(enabled);
   }
 
+  /**
+   * Level 2: Next-Gen 3D Free-Roam Movement Controller
+   * - Full 360° (X, Z) camera-relative movement, sprint, faster crouch-walk, jump, double-jump & jetpack
+   * - Smooth Conveyor Belt velocity carry
+   * - Exact 30° Ramp surface height tracking & Next-Gen slope foot alignment!
+   */
+  public setFreeRoamAimMode(enabled: boolean) {
+    if (this.mixamoRig) this.mixamoRig.use3DForwardAim = enabled;
+  }
+
+  public updateFreeRoam3D(
+    dt: number,
+    moveX: number,
+    moveZ: number,
+    runPressed: boolean,
+    jumpPressed: boolean,
+    jetpackPressed: boolean,
+    crouchPressed: boolean,
+    jumpHeld: boolean,
+    jetpackThrottle: number,
+    jetpackDirectTrigger: boolean,
+    resolveMove: (prevX: number, prevY: number, prevZ: number, nextX: number, nextZ: number, radius?: number) => {
+      x: number;
+      z: number;
+      surface: { height: number; slopeAngleX: number; slopeAngleZ: number; conveyorVx: number; conveyorVz: number };
+    },
+    camYaw: number = 0,
+    slideTrigger: boolean = false
+  ) {
+    this.animTimer += dt;
+    if (this.shootTimer > 0) this.shootTimer = Math.max(0, this.shootTimer - dt);
+    if (this.invulnerableTime > 0) this.invulnerableTime = Math.max(0, this.invulnerableTime - dt);
+    this.updateLasers(dt);
+
+    // 1. Camera-relative 360° horizontal movement vector
+    const inputLen = Math.hypot(moveX, moveZ);
+    let worldMoveX = 0;
+    let worldMoveZ = 0;
+    if (inputLen > 0.05) {
+      const clampedLen = Math.min(1, inputLen);
+      const nx = moveX / inputLen;
+      const nz = moveZ / inputLen;
+      const cosY = Math.cos(camYaw);
+      const sinY = Math.sin(camYaw);
+      worldMoveX = (nx * cosY + nz * sinY) * clampedLen;
+      worldMoveZ = (-nx * sinY + nz * cosY) * clampedLen;
+    }
+
+    // 1b. Running Slide Trigger (C/Ctrl OR Gamepad RB!) + Mid-Air Slide Buffer (Jump -> Land directly into a silky Slide!)
+    if (this.slideCooldown > 0) this.slideCooldown = Math.max(0, this.slideCooldown - dt);
+    if (this.slideBufferTimer > 0) this.slideBufferTimer = Math.max(0, this.slideBufferTimer - dt);
+    const crouchJustPressed = (crouchPressed && !this.prevCrouchPressed) || slideTrigger;
+    this.prevCrouchPressed = crouchPressed;
+
+    // Buffer a landing slide if player taps Slide/RB in mid-air or holds Crouch while descending!
+    if ((crouchJustPressed || (crouchPressed && this.velocity.y < -0.5)) && !this.isGrounded) {
+      this.slideBufferTimer = 0.32;
+    }
+
+    const curHorizSpd = Math.hypot(this.velocity.x, this.velocity.z);
+    const wantSlideNow = crouchJustPressed || (this.slideBufferTimer > 0 && this.isGrounded);
+    if (
+      wantSlideNow &&
+      this.isGrounded &&
+      !this.isDying &&
+      this.slideTimer <= 0 &&
+      this.slideCooldown <= 0 &&
+      (slideTrigger || this.slideBufferTimer > 0 || curHorizSpd > 3.2)
+    ) {
+      this.slideBufferTimer = 0;
+      this.slideTimer = 0.92;
+      this.slideCooldown = 0.22;
+      const yaw = this.rigRoot.rotation.y;
+      const slideDirX = curHorizSpd > 0.3 ? (this.velocity.x / curHorizSpd) : Math.cos(yaw);
+      const slideDirZ = curHorizSpd > 0.3 ? (this.velocity.z / curHorizSpd) : -Math.sin(yaw);
+      const boost = Math.max(curHorizSpd + 3.4, 13.0);
+      this.velocity.x = slideDirX * boost;
+      this.velocity.z = slideDirZ * boost;
+      this.emitDust(this.position.x, this.position.y, 10);
+      this.mixamoRig?.triggerSlide();
+      this.onSlide?.();
+    }
+
+    if (this.slideTimer > 0) {
+      this.slideTimer = Math.max(0, this.slideTimer - dt);
+      if (!this.isGrounded || this.isDying) {
+        this.slideTimer = 0;
+      } else if (Math.random() < 0.45) {
+        this.emitDust(this.position.x, this.position.y, 1);
+      }
+    }
+
+    const isSliding = this.slideTimer > 0 && this.isGrounded && !this.isDying;
+    const isActuallyCrouching = !isSliding && this.isGrounded && crouchPressed;
+    const walkSpeed = this.hasHyperJetpack ? 5.6 : 4.6; // Stride-matched walk speed (zero foot sliding!)
+    const runSpeed = this.hasHyperJetpack ? 13.6 : 10.6;
+    const crouchSpeed = 4.2;
+    const targetSpeed = isActuallyCrouching ? crouchSpeed : (runPressed ? runSpeed : walkSpeed);
+
+    const accel = this.isGrounded ? 10.0 : 5.5;
+    if (isSliding) {
+      this.velocity.x *= (1.0 - Math.min(0.9, dt * 1.6));
+      this.velocity.z *= (1.0 - Math.min(0.9, dt * 1.6));
+    } else {
+      this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, worldMoveX * targetSpeed, Math.min(1, dt * accel));
+      this.velocity.z = THREE.MathUtils.lerp(this.velocity.z, worldMoveZ * targetSpeed, Math.min(1, dt * accel));
+      if (inputLen < 0.05 && this.isGrounded && Math.hypot(this.velocity.x, this.velocity.z) < 0.16) {
+        this.velocity.x = 0;
+        this.velocity.z = 0;
+      }
+    }
+
+    // Smooth 360° yaw facing toward movement direction
+    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    if (inputLen > 0.08 && horizSpeed > 0.25) {
+      const targetYaw = Math.atan2(-this.velocity.z, this.velocity.x);
+      let diff = targetYaw - this.rigRoot.rotation.y;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      this.rigRoot.rotation.y += diff * Math.min(1, dt * 14.0);
+      this.facingRight = Math.cos(this.rigRoot.rotation.y) >= 0;
+    }
+
+    // 2. Jump, Double Jump & Jetpack Hover/Flight
+    if (this.isGrounded) {
+      this.coyoteTimer = 0.12;
+      this.jumpsRemaining = this.maxJumps;
+      this.usedJetpackThisAir = false;
+      this.jetpackHoverHangTimer = 0;
+    } else {
+      this.coyoteTimer = Math.max(0, this.coyoteTimer - dt);
+    }
+
+    if (jumpPressed) {
+      if (this.coyoteTimer > 0) {
+        this.velocity.y = 12.2;
+        this.isGrounded = false;
+        this.coyoteTimer = 0;
+        this.jumpsRemaining = this.maxJumps - 1;
+        this.mixamoRig?.triggerJump(false, this.position);
+        this.onJump?.(false);
+      } else if (this.jumpsRemaining > 0) {
+        this.velocity.y = 11.4;
+        this.jumpsRemaining--;
+        this.mixamoRig?.triggerJump(true, this.position);
+        this.onJump?.(true);
+      }
+    }
+    if (!jumpHeld && this.velocity.y > 4.5 && !jetpackPressed) {
+      this.velocity.y *= 0.85;
+    }
+
+    const wantJetpack = (jetpackDirectTrigger || (!this.isGrounded && this.jumpsRemaining <= 0 && jetpackPressed)) && this.fuel > 0;
+    let isHoverHanging = false;
+    if (wantJetpack) {
+      this.usedJetpackThisAir = true;
+      this.jetpackHoverHangTimer = 1.0;
+      const throttle = Math.max(0.25, jetpackThrottle);
+      this.fuel = Math.max(0, this.fuel - 26.0 * throttle * dt);
+      this.velocity.y = THREE.MathUtils.lerp(this.velocity.y, 2.2 + 4.4 * throttle, Math.min(1, dt * 8.0));
+      this.isGrounded = false;
+    } else {
+      this.fuel = Math.min(this.maxFuel, this.fuel + (this.isGrounded ? 48.0 : 18.0) * dt);
+      if (!this.isGrounded && this.usedJetpackThisAir && this.jetpackHoverHangTimer > 0) {
+        this.jetpackHoverHangTimer = Math.max(0, this.jetpackHoverHangTimer - dt);
+        isHoverHanging = true;
+        this.velocity.y = THREE.MathUtils.lerp(this.velocity.y, 0, Math.min(1, dt * 12.0));
+      } else {
+        this.velocity.y -= 28.5 * dt;
+        this.velocity.y = Math.max(this.velocity.y, -19.5);
+      }
+    }
+
+    // 3. Super-Tight 3D Collision Resolution + Seamless Conveyor Momentum Preservation!
+    const prevX = this.position.x;
+    const prevY = this.position.y;
+    const prevZ = this.position.z;
+    const preSurf = resolveMove(prevX, prevY, prevZ, prevX, prevZ, 0.34).surface;
+    const onConveyorNow = this.isGrounded && (Math.abs(preSurf.conveyorVx) > 0.05 || Math.abs(preSurf.conveyorVz) > 0.05);
+
+    if (onConveyorNow) {
+      this.carriedConveyorVx = preSurf.conveyorVx;
+      this.carriedConveyorVz = preSurf.conveyorVz;
+    } else if (Math.abs(this.carriedConveyorVx) > 0.05 || Math.abs(this.carriedConveyorVz) > 0.05) {
+      // Preserve full conveyor speed into Jones's velocity when exiting OR jumping off the conveyor belt!
+      this.velocity.x += this.carriedConveyorVx;
+      this.velocity.z += this.carriedConveyorVz;
+      this.carriedConveyorVx = 0;
+      this.carriedConveyorVz = 0;
+    }
+
+    const carryVx = onConveyorNow ? preSurf.conveyorVx : 0;
+    const carryVz = onConveyorNow ? preSurf.conveyorVz : 0;
+
+    const rawNextX = THREE.MathUtils.clamp(prevX + (this.velocity.x + carryVx) * dt, -52, 80);
+    const rawNextZ = THREE.MathUtils.clamp(prevZ + (this.velocity.z + carryVz) * dt, -64, 64);
+    const resolved = resolveMove(prevX, prevY, prevZ, rawNextX, rawNextZ, 0.34);
+    this.position.x = resolved.x;
+    this.position.z = resolved.z;
+    const surface = resolved.surface;
+
+    const prevVy = this.velocity.y;
+    this.position.y += this.velocity.y * dt;
+
+    // 4. Exact Surface & 30° Ramp Ground Snapping (ZERO penetration into conveyor belt, smooth landing-to-slide!)
+    const snapTolerance = this.wasGroundedLastFrame ? 0.38 : 0.14;
+    if (this.position.y <= surface.height + snapTolerance && this.velocity.y <= 0.6 && !wantJetpack) {
+      if (!this.wasGroundedLastFrame) {
+        const impact = THREE.MathUtils.clamp(-prevVy / 13.0, 0.35, 1.0);
+        // If landing straight into a buffered slide, flow cleanly into the slide!
+        if (this.slideBufferTimer > 0 && this.slideCooldown <= 0) {
+          this.slideBufferTimer = 0;
+          this.slideTimer = 0.92;
+          this.slideCooldown = 0.22;
+          const spd = Math.hypot(this.velocity.x, this.velocity.z);
+          const yaw = this.rigRoot.rotation.y;
+          const sx = spd > 0.3 ? (this.velocity.x / spd) : Math.cos(yaw);
+          const sz = spd > 0.3 ? (this.velocity.z / spd) : -Math.sin(yaw);
+          const boost = Math.max(spd + 2.8, 12.2);
+          this.velocity.x = sx * boost;
+          this.velocity.z = sz * boost;
+          this.emitDust(this.position.x, surface.height, 12);
+          this.mixamoRig?.triggerSlide();
+          this.onSlide?.();
+        } else {
+          this.mixamoRig?.triggerLand(impact, this.usedJetpackThisAir);
+          this.onLand?.(impact);
+        }
+      }
+      this.position.y = surface.height;
+      this.velocity.y = 0;
+      this.isGrounded = true;
+    } else if (this.position.y < surface.height) {
+      // Never penetrate below conveyor belt or ramp surface!
+      this.position.y = surface.height;
+      this.velocity.y = Math.max(0, this.velocity.y);
+      this.isGrounded = !wantJetpack;
+    } else {
+      this.isGrounded = false;
+    }
+    this.wasGroundedLastFrame = this.isGrounded;
+
+    // 5. State Machine
+    if (wantJetpack || isHoverHanging) {
+      this.state = PlayerState.JETPACK;
+    } else if (!this.isGrounded) {
+      this.state = this.velocity.y > 0 ? PlayerState.JUMP : PlayerState.FALL;
+    } else if (isSliding) {
+      this.state = PlayerState.SLIDE;
+    } else if (isActuallyCrouching) {
+      this.state = horizSpeed > 0.25 ? PlayerState.CROUCH_WALK : PlayerState.CROUCH;
+    } else if (horizSpeed > 0.25) {
+      this.state = (runPressed || horizSpeed > 6.4) ? PlayerState.RUN : PlayerState.WALK;
+    } else {
+      this.state = PlayerState.IDLE;
+    }
+
+    // 6. Compute Next-Gen 30° Slope Foot Alignment in Jones's Local Facing Frame!
+    // Project world slope angle (slopeAngleX along +X, slopeAngleZ along +Z) onto Jones's forward & lateral axes:
+    const yaw = this.rigRoot.rotation.y;
+    const localForwardSlope = surface.slopeAngleX * Math.cos(yaw) - surface.slopeAngleZ * Math.sin(yaw);
+    const localSideSlope = surface.slopeAngleX * Math.sin(yaw) + surface.slopeAngleZ * Math.cos(yaw);
+
+    this.mesh.position.copy(this.position);
+    this.rigRoot.position.set(0, 0, 0);
+    this.rigRoot.rotation.z = 0;
+
+    // Hide fake blob shadow in Level 2 so ONLY the real Triple-AAA PCFSoftShadowMap character shadow is visible!
+    if (this.shadowMesh) {
+      this.shadowMesh.visible = false;
+    }
+
+    const effThrottle = wantJetpack ? Math.max(0.35, jetpackThrottle) : 0;
+    this.mixamoRig?.update(
+      dt,
+      this.state,
+      horizSpeed,
+      this.velocity.y,
+      this.isGrounded,
+      isActuallyCrouching,
+      effThrottle,
+      Math.max(0, this.position.y - surface.height),
+      this.usedJetpackThisAir,
+      undefined,
+      false,
+      isHoverHanging,
+      localForwardSlope,
+      localSideSlope
+    );
+
+    this.mesh.updateMatrixWorld(true);
+    if (this.mixamoRig?.isLoaded) {
+      this.mixamoRig.getNozzleWorldPositions(this.nozzleWorldL, this.nozzleWorldR, this.position);
+      this.jetpackVfx.update(
+        dt,
+        effThrottle,
+        this.nozzleWorldL,
+        this.nozzleWorldR,
+        this.velocity.x,
+        this.velocity.y,
+        surface.height,
+        this.hasHyperJetpack,
+        isHoverHanging
+      );
+    }
+    this.updateForcefieldSystem(dt, isActuallyCrouching);
+    this.updateBubbleBurstVFX(dt);
+    // Keep thrusterLight strictly off when grounded in Level 2 so it never glows on Jones or washes out his floor shadow!
+    if (this.thrusterLight) {
+      if (wantJetpack || isHoverHanging) {
+        this.thrusterLight.color.setHex(isHoverHanging ? 0xff9933 : 0x00bbff);
+        this.thrusterLight.position.set(this.position.x, this.position.y + 0.65, this.position.z);
+        this.thrusterLight.intensity = 1.25;
+      } else {
+        this.thrusterLight.intensity = 0;
+      }
+    }
+    this.updateParticles(dt);
+  }
+
   public updateHangarShowcase(dt: number, isJetpacking: boolean, hoverHeight: number) {
+    // Hide fake blob shadow in Hangar so ONLY Jones's real sun-cast shadow appears on the rotating disc!
+    if (this.shadowMesh) {
+      this.shadowMesh.visible = false;
+    }
     const state = isJetpacking
       ? PlayerState.JETPACK
       : (hoverHeight > 0.08 ? PlayerState.FALL : PlayerState.IDLE);
@@ -270,6 +594,9 @@ export class Player {
   private jumpCutApplied: boolean = false;
   private slideTimer: number = 0;
   private slideCooldown: number = 0;
+  private slideBufferTimer: number = 0; // Allows pressing Slide/RB in mid-air to land straight into a silky slide!
+  private carriedConveyorVx: number = 0;
+  private carriedConveyorVz: number = 0;
   private slideDir: number = 1;
   private prevCrouchPressed: boolean = false;
   private usedJetpackThisAir: boolean = false;
@@ -1828,27 +2155,56 @@ export class Player {
     }
     this.currentAimAngle = aimAngle;
 
-    // Calculate exact muzzle position (Colt Peacemaker Barrel Tip when loaded, else procedural blaster tip)
+    // Hyper-accurate Colt Peacemaker Barrel Tip World Origin:
+    // Sync mesh position & full world matrix chain BEFORE and AFTER triggerShoot so gunMuzzleTip is exact to the millimeter!
+    this.mesh.position.copy(this.position);
     this.mesh.updateWorldMatrix(true, true);
     const muzzlePos = new THREE.Vector3();
+    const is3D = Boolean(this.mixamoRig?.use3DForwardAim);
     if (this.mixamoRig?.isLoaded) {
-      this.mixamoRig.triggerShoot(aimAngle);
+      let aimPitch3D = 0;
+      if (is3D && aimTargetWorld) {
+        const dx = aimTargetWorld.x - this.position.x;
+        const dz = aimTargetWorld.z - this.position.z;
+        const dy = aimTargetWorld.y - (this.position.y + 1.48);
+        const horiz = Math.hypot(dx, dz);
+        if (horiz > 0.2) {
+          aimPitch3D = THREE.MathUtils.clamp(Math.atan2(dy, horiz), -0.55, 0.55);
+        }
+      }
+      this.mixamoRig.triggerShoot(is3D ? aimPitch3D : aimAngle);
+      this.mesh.updateWorldMatrix(true, true);
       this.onHaptic?.(42, 0.34, 0.22);
       const barrelTip = this.mixamoRig.getMuzzleWorldPosition(
-        new THREE.Vector3(this.position.x + (this.facingRight ? 0.65 : -0.65), this.position.y + 1.38, 0)
+        new THREE.Vector3(this.position.x + (this.facingRight ? 0.65 : -0.65), this.position.y + 1.38, this.position.z)
       );
       muzzlePos.copy(barrelTip);
-      muzzlePos.z = 0; // Keep laser strictly on the z = 0 gameplay plane for crisp hit detection!
+      if (!is3D) muzzlePos.z = 0; // Keep laser strictly on z = 0 plane in 2D Level 1!
     } else {
       this.bubbleBurstGroup.getWorldPosition(muzzlePos);
     }
 
     laser.position.copy(muzzlePos);
-    laser.velocity.set(Math.cos(aimAngle) * 34, Math.sin(aimAngle) * 34, 0);
+    if (is3D) {
+      // Derive exact 3D barrel forward direction from Jones's live container world +X axis
+      const dir = new THREE.Vector3(1, 0, 0).transformDirection(this.mixamoRig.container.matrixWorld).normalize();
+      if (aimTargetWorld) {
+        const toTarget = new THREE.Vector3().subVectors(aimTargetWorld, muzzlePos);
+        if (toTarget.lengthSq() > 0.04) {
+          toTarget.normalize();
+          if (toTarget.dot(dir) > 0.25) dir.copy(toTarget);
+        }
+      }
+      laser.velocity.copy(dir).multiplyScalar(42);
+      // Quaternion alignment guarantees 100% collinearity with 3D direction (zero Euler gimbal offset!)
+      laser.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
+    } else {
+      laser.velocity.set(Math.cos(aimAngle) * 42, Math.sin(aimAngle) * 42, 0);
+      laser.mesh.rotation.set(0, 0, aimAngle);
+    }
     laser.active = true;
-    laser.life = 1.3;
+    laser.life = 1.8;
     laser.mesh.position.copy(laser.position);
-    laser.mesh.rotation.set(0, 0, aimAngle);
     laser.mesh.visible = true;
 
     // Trigger bubble burst droplets
@@ -1865,7 +2221,7 @@ export class Player {
 
     this.muzzleLight.position.copy(muzzlePos);
     this.muzzleLight.position.z += 0.2;
-    this.muzzleLight.intensity = 22;
+    this.muzzleLight.intensity = 6.5;
 
     return true;
   }
@@ -2022,7 +2378,8 @@ export class Player {
     jumpHeld: boolean = false,
     jetpackThrottle: number = 1.0,
     jetpackDirectTrigger: boolean = false,
-    isManualGamepadAim: boolean = false
+    isManualGamepadAim: boolean = false,
+    slideTrigger: boolean = false
   ) {
     this.animTimer += dt;
     if (this.invulnerableTime > 0) {
@@ -2107,19 +2464,26 @@ export class Player {
       }
     }
 
-    // Running Slide Trigger & Physics (Sprint/Fast-Move + Crouch = Triple-AAA Momentum Slide!)
+    // Running Slide Trigger & Physics (Sprint/Fast-Move + Crouch OR Gamepad RB OR Mid-Air Buffered Landing Slide!)
     if (this.slideCooldown > 0) this.slideCooldown = Math.max(0, this.slideCooldown - dt);
-    const crouchJustPressed = crouchPressed && !this.prevCrouchPressed;
+    if (this.slideBufferTimer > 0) this.slideBufferTimer = Math.max(0, this.slideBufferTimer - dt);
+    const crouchJustPressed = (crouchPressed && !this.prevCrouchPressed) || slideTrigger;
     this.prevCrouchPressed = crouchPressed;
 
+    if ((crouchJustPressed || (crouchPressed && this.velocity.y < -0.5)) && !this.isGrounded) {
+      this.slideBufferTimer = 0.32;
+    }
+
+    const wantL1Slide = crouchJustPressed || (this.slideBufferTimer > 0 && this.isGrounded);
     if (
-      crouchJustPressed &&
+      wantL1Slide &&
       this.isGrounded &&
       !this.isDying &&
       this.slideTimer <= 0 &&
       this.slideCooldown <= 0 &&
-      Math.abs(this.velocity.x) > 5.6
+      (slideTrigger || this.slideBufferTimer > 0 || Math.abs(this.velocity.x) > 4.2)
     ) {
+      this.slideBufferTimer = 0;
       this.slideTimer = 0.92;
       this.slideCooldown = 0.25;
       this.slideDir = this.velocity.x >= 0 ? 1 : -1;
@@ -2151,9 +2515,9 @@ export class Player {
     const isSliding = this.slideTimer > 0 && this.isGrounded && !this.isDying;
     const isActuallyCrouching = !isSliding && (this.isGrounded || ceilingBlocked) && (crouchPressed || ceilingBlocked) && !this.isDying;
     const isLowProfile = isSliding || isActuallyCrouching;
-    const walkSpeed = this.hasHyperJetpack ? 8.2 : 6.2;
-    const runSpeed = this.hasHyperJetpack ? 14.0 : 10.5;
-    const crouchSpeed = 2.8;
+    const walkSpeed = this.hasHyperJetpack ? 5.6 : 4.6; // Stride-matched walk speed (zero foot sliding!)
+    const runSpeed = this.hasHyperJetpack ? 13.6 : 10.5;
+    const crouchSpeed = 4.2; // Faster, snappier crouch-walking!
     const targetSpeed = isActuallyCrouching ? crouchSpeed : (runPressed ? runSpeed : walkSpeed);
 
     // Next-Gen Triple-AAA Horizontal Acceleration & Crisp Stopping (zero ice-skating!)
@@ -3648,7 +4012,7 @@ export class Player {
           0,
           1.0 - popProg * 1.8
         );
-        this.muzzleLight.intensity = Math.max(0, 22 * (1.0 - popProg));
+        this.muzzleLight.intensity = Math.max(0, 6.5 * (1.0 - popProg));
       }
     } else {
       (this.bubbleSphereMesh.material as THREE.MeshBasicMaterial).opacity = 0;

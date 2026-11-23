@@ -1211,7 +1211,9 @@
         <button id="btn-fullscreen" class="icon-btn" title="Toggle Fullscreen (F)">⛶ FULL [F]</button>
         <button id="btn-shield" class="icon-btn" title="Toggle Force Field On/Off (B)">🛡️ FORCEFIELD: OFF [B]</button>
         <button id="btn-forcefield-mode" class="icon-btn" title="Select Force Field Mode: Ball vs Bubble">MODE: ⚽ BALL</button>
-        <button id="btn-level" class="icon-btn" title="Toggle Level 1 / 2 (L)" style="color: #39ff14; border-color: #39ff14;">🪐 LEVEL 2: ALIEN [L]</button>
+        <button id="btn-level" class="icon-btn" title="Switch Level 1 / 2 (L)" style="color: #39ff14; border-color: #39ff14;">🪐 LEVEL 1 [L]</button>
+        <button id="btn-cam-view" class="icon-btn" title="Toggle Level 2 Camera: 3rd Person vs Orthographic (V)" style="display: none; color: #38d2ff; border-color: #2574e8;">🎥 3RD PERSON [V]</button>
+        <button id="btn-l2-pixel" class="icon-btn" title="Toggle Pixel-Art Effect in Level 2" style="display: none; color: #ff6cb5; border-color: #ff6cb5;">👾 PIXEL: OFF</button>
         <button id="btn-hangar" class="icon-btn" title="Customize Jones & Jetpacks" style="color: #ff9e44; border-color: #ff7f2a;">🛠️ HANGAR</button>
         <button id="btn-audio" class="icon-btn" title="Toggle Sound">🔊 SFX ON</button>
       </div>
@@ -1680,25 +1682,25 @@
         </div>
       </div>
 
-      <!-- Always-Visible 1979 Telemetry FPS Counter -->
+      <!-- Always-Visible 1979 Telemetry FPS Counter (Positioned cleanly below top-left title/score — NEVER covers any HUD/menu button!) -->
       <div id="fps-counter" aria-live="off" style="
         position: fixed;
-        top: 10px;
-        left: 12px;
+        top: 96px;
+        left: 14px;
         z-index: 9999;
         pointer-events: none;
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 5px 10px;
-        background: rgba(16, 12, 10, 0.82);
+        gap: 7px;
+        padding: 4px 9px;
+        background: rgba(16, 12, 10, 0.80);
         border: 1.5px solid #a6ff38;
         border-radius: 6px;
-        box-shadow: 0 0 12px rgba(166, 255, 56, 0.35), inset 0 0 6px rgba(166, 255, 56, 0.14);
+        box-shadow: 0 0 10px rgba(166, 255, 56, 0.30);
         font-family: 'Share Tech Mono', monospace;
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.8px;
+        letter-spacing: 0.7px;
         color: #a6ff38;
         text-shadow: 0 0 6px rgba(166, 255, 56, 0.65);
       ">

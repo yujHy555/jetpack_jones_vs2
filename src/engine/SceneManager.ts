@@ -4,6 +4,10 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 export class SceneManager {
   public scene: THREE.Scene;
   public camera: THREE.PerspectiveCamera;
+  public orthoCamera: THREE.OrthographicCamera;
+  public level2CamMode: 'third_person' | 'orthographic' = 'third_person';
+  public level2OrbitYaw: number = 0;
+  public level2OrbitPitch: number = 0.28;
   public renderer: THREE.WebGLRenderer;
   private canvas: HTMLCanvasElement;
 
@@ -57,6 +61,19 @@ export class SceneManager {
     this.camera = new THREE.PerspectiveCamera(46, aspect, 0.1, 140);
     this.camera.position.set(0, 0, this.baseZ);
 
+    // Triple-AAA Orthographic Camera for Level 2 Isometric/Tactical View
+    const orthoHalfH = 7.2;
+    this.orthoCamera = new THREE.OrthographicCamera(
+      -orthoHalfH * aspect,
+      orthoHalfH * aspect,
+      orthoHalfH,
+      -orthoHalfH,
+      -40,
+      160
+    );
+    this.orthoCamera.position.set(14, 14, 14);
+    this.orthoCamera.lookAt(0, -3.7, 0);
+
     // WebGL Renderer configuration
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
@@ -69,17 +86,27 @@ export class SceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.35;
 
-    // Cel-Shading & Flat Vibrant Lighting: disabled heavy 3D shadow maps in favor of clean round toon shadows
-    this.renderer.shadowMap.enabled = false;
+    // Triple-AAA Highly Optimized Real-Time Shadows (PCFSoftShadowMap, tight frustum enabled in Level 2 & Hangar!)
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     // Bright Flat Cel-Shading Environment Lighting
     this.ambientLight = new THREE.AmbientLight(0xffffff, 3.4);
     this.scene.add(this.ambientLight);
 
-    // Gentle front-top fill wash for vivid cartoon colors without harsh dark shading
+    // Gentle front-top fill wash + tight optimized shadow camera for Level 2 real character shadows
     this.keyLight = new THREE.DirectionalLight(0xfff8ee, 1.4);
     this.keyLight.position.set(0.5, 20, 10);
-    this.keyLight.castShadow = false;
+    this.keyLight.castShadow = false; // Activated cleanly in Level 2 for 0ms cost in Level 1!
+    this.keyLight.shadow.mapSize.set(1024, 1024);
+    this.keyLight.shadow.camera.near = 2;
+    this.keyLight.shadow.camera.far = 38;
+    this.keyLight.shadow.camera.left = -10;
+    this.keyLight.shadow.camera.right = 10;
+    this.keyLight.shadow.camera.top = 10;
+    this.keyLight.shadow.camera.bottom = -10;
+    this.keyLight.shadow.bias = -0.0005;
+    this.keyLight.shadow.normalBias = 0.025;
     this.scene.add(this.keyLight);
     this.scene.add(this.keyLight.target);
 
@@ -132,8 +159,8 @@ export class SceneManager {
     const w = Math.max(1, window.innerWidth);
     const h = Math.max(1, window.innerHeight);
     const aspect = w / h;
-    // Render Pixel-Art RT at exact 220p arcade resolution (~85k pixels total -> ultra-fast 120+ FPS!)
-    const rtH = 220;
+    // Render Pixel-Art RT at crisp 320p arcade resolution (clearer detail, same Triple-AAA 1-pass speed!)
+    const rtH = 320;
     const rtW = Math.max(1, Math.round(rtH * aspect));
     this.pixelRT = new THREE.WebGLRenderTarget(rtW, rtH, {
       minFilter: THREE.NearestFilter,
@@ -166,7 +193,7 @@ export class SceneManager {
         tDiffuse: { value: this.pixelRT.texture },
         tDepth: { value: this.pixelRT.depthTexture },
         uResolution: { value: new THREE.Vector2(w, h) },
-        uPixelHeight: { value: 220.0 },
+        uPixelHeight: { value: 320.0 },
         uBlend: { value: 0.0 },
         uFlash: { value: 0.0 },
         uTime: { value: 0.0 },
@@ -263,21 +290,21 @@ export class SceneManager {
           // Bright shadow-lift so Jones's outfit, face & chrome jetpack stay vivid and NEVER look dark!
           col = pow(max(col, vec3(0.001)), vec3(0.86)) * 1.15;
 
-          // Clean outer-silhouette pixel-edge outline (avoids darkening internal clothing folds!)
+          // Clean, refined outer-silhouette pixel-edge outline (crisper detail without muddying faces/jetpacks!)
           float cL = luma(col);
           float lR = luma(pow(max(texture2D(tDiffuse, pixUv + vec2(stepUv.x, 0.0)).rgb, vec3(0.001)), vec3(0.86)) * 1.15);
           float lD = luma(pow(max(texture2D(tDiffuse, pixUv + vec2(0.0, -stepUv.y)).rgb, vec3(0.001)), vec3(0.86)) * 1.15);
           float edge = abs(lR - cL) + abs(lD - cL);
-          float outlineMask = smoothstep(0.20, 0.48, edge);
-          col = mix(col, col * 0.45, outlineMask * 0.52);
+          float outlineMask = smoothstep(0.24, 0.56, edge);
+          col = mix(col, col * 0.52, outlineMask * 0.38);
 
-          // Vibrant 16-bit color pop + zero-branch ordered dithering + 16-level quantization
-          col = mix(vec3(cL), col, 1.18);
-          float dither = (orderedDither(pixCoord) - 0.5) * (1.0 / 16.0);
-          vec3 quant = floor(clamp(col + dither, 0.0, 1.0) * 16.0 + 0.5) / 16.0;
+          // Vibrant clearer 24-level pixel-art color quantization + refined ordered dithering
+          col = mix(vec3(cL), col, 1.15);
+          float dither = (orderedDither(pixCoord) - 0.5) * (1.0 / 24.0);
+          vec3 quant = floor(clamp(col + dither, 0.0, 1.0) * 24.0 + 0.5) / 24.0;
 
-          // Subtle arcade pixel-row micro-scanline sheen
-          float scan = 0.97 + 0.03 * sin(vUv.y * uPixelHeight * 6.2831853);
+          // Ultra-subtle crisp scanline sheen
+          float scan = 0.985 + 0.015 * sin(vUv.y * uPixelHeight * 6.2831853);
           vec3 finalCol = quant * scan;
 
           // Crisp cyan-magenta dimensional portal transition flash
@@ -319,8 +346,14 @@ export class SceneManager {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
     const aspect = width / Math.max(1, height);
+    const orthoHalfH = 7.2;
+    this.orthoCamera.left = -orthoHalfH * aspect;
+    this.orthoCamera.right = orthoHalfH * aspect;
+    this.orthoCamera.top = orthoHalfH;
+    this.orthoCamera.bottom = -orthoHalfH;
+    this.orthoCamera.updateProjectionMatrix();
     if (this.pixelRT) {
-      const rtH = 220;
+      const rtH = 320;
       const rtW = Math.max(1, Math.round(rtH * aspect));
       this.pixelRT.setSize(rtW, rtH);
     }
@@ -360,6 +393,7 @@ export class SceneManager {
     this.scene.fog = null;
 
     if (lvl === 3) {
+      this.scene.environmentIntensity = 0.85;
       this.ambientLight.color.setHex(0xffeedd);
       this.ambientLight.intensity = 2.6;
       this.keyLight.color.setHex(0xffaa85);
@@ -367,20 +401,37 @@ export class SceneManager {
       this.rimLight.color.setHex(0x44ccff);
       this.rimLight.intensity = 1.2;
     } else if (lvl === 2) {
-      this.ambientLight.color.setHex(0xffffff);
-      this.ambientLight.intensity = 2.8;
-      this.keyLight.color.setHex(0xfff8ee);
-      this.keyLight.intensity = 1.4;
-      this.rimLight.color.setHex(0x88eeff);
-      this.rimLight.intensity = 1.0;
+      // High-contrast Triple-AAA sun/ambient balance + restrained IBL so Jones never glows & his cast shadow is rich & dark!
+      this.scene.environmentIntensity = 0.30;
+      this.ambientLight.color.setHex(0xcfdfff);
+      this.ambientLight.intensity = 0.36;
+      this.keyLight.color.setHex(0xfff4dc);
+      this.keyLight.intensity = 2.65;
+      this.keyLight.castShadow = true; // Real AAA character shadows in Level 2!
+      this.keyLight.shadow.bias = -0.0004;
+      this.keyLight.shadow.normalBias = 0.018;
+      this.rimLight.color.setHex(0x88ccff);
+      this.rimLight.intensity = 0.28;
     } else {
+      this.scene.environmentIntensity = 0.85;
       this.ambientLight.color.setHex(0xffffff);
       this.ambientLight.intensity = 2.8;
       this.keyLight.color.setHex(0xfff8ee);
       this.keyLight.intensity = 1.4;
+      this.keyLight.castShadow = false;
       this.rimLight.color.setHex(0x88eeff);
       this.rimLight.intensity = 1.0;
     }
+  }
+
+  /**
+   * Resets Level 1 camera strictly to its default straight-on 2.5D pose so Hangar orbit NEVER influences Level 1!
+   */
+  public resetLevel1Camera(targetX: number = 0, targetY: number = -3.70) {
+    this.camera.up.set(0, 1, 0);
+    this.camera.quaternion.identity();
+    this.camera.rotation.set(0, 0, 0);
+    this.camera.position.set(targetX + 1.8, Math.max(-1.5, targetY + 1.2), this.baseZ);
   }
 
   /**
@@ -393,6 +444,9 @@ export class SceneManager {
     this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetCamX, dt * 6.5);
     this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetCamY, dt * 6.5);
     this.camera.position.z = THREE.MathUtils.lerp(this.camera.position.z, this.baseZ + this.cameraZoomOffset, dt * 6.5);
+
+    // Always keep Level 1 2.5D camera strictly forward-aligned (never carries Hangar yaw!)
+    this.camera.rotation.y = 0;
 
     // Subtle Organic Handheld Camera Breathing & Sway (scaled by user slider)
     if (this.handheldEnabled && this.handheldIntensity > 0) {
@@ -451,10 +505,77 @@ export class SceneManager {
     this.renderer.render(this.scene, this.camera);
   }
 
-  public render() {
+  public toggleLevel2CameraMode(): 'third_person' | 'orthographic' {
+    this.level2CamMode = this.level2CamMode === 'third_person' ? 'orthographic' : 'third_person';
+    return this.level2CamMode;
+  }
+
+  public getActiveCamera(isHangar: boolean = false): THREE.Camera {
+    if (!isHangar && this.currentLevel === 2 && this.level2CamMode === 'orthographic') {
+      return this.orthoCamera;
+    }
+    return this.camera;
+  }
+
+  /**
+   * Level 2 Triple-AAA Dual Camera System:
+   * - 'third_person': Smooth dynamic 3rd-person follow camera behind/above Jones with optional right-stick orbit!
+   * - 'orthographic': Crisp Triple-AAA isometric orthographic camera tracking Jones smoothly across the 3D plane!
+   */
+  public updateCameraFreeRoam(
+    targetX: number,
+    targetY: number,
+    targetZ: number,
+    dt: number,
+    rightStickX: number = 0,
+    rightStickY: number = 0
+  ) {
+    if (Math.abs(rightStickX) > 0.01) {
+      this.level2OrbitYaw -= rightStickX * dt * 2.0;
+    }
+    if (Math.abs(rightStickY) > 0.01) {
+      this.level2OrbitPitch = THREE.MathUtils.clamp(this.level2OrbitPitch - rightStickY * dt * 1.2, 0.08, 0.72);
+    }
+
+    const focusY = targetY + 1.15;
+    if (this.level2CamMode === 'orthographic') {
+      // Triple-AAA Isometric Orthographic Tracking Camera
+      const goalX = targetX + 12.0;
+      const goalY = focusY + 11.5;
+      const goalZ = targetZ + 12.0;
+      this.orthoCamera.position.x = THREE.MathUtils.lerp(this.orthoCamera.position.x, goalX, Math.min(1, dt * 6.5));
+      this.orthoCamera.position.y = THREE.MathUtils.lerp(this.orthoCamera.position.y, goalY, Math.min(1, dt * 6.5));
+      this.orthoCamera.position.z = THREE.MathUtils.lerp(this.orthoCamera.position.z, goalZ, Math.min(1, dt * 6.5));
+      this.orthoCamera.lookAt(targetX, focusY, targetZ);
+    } else {
+      // Triple-AAA 3rd-Person Perspective Follow Camera
+      const dist = 10.5;
+      const cosP = Math.cos(this.level2OrbitPitch);
+      const goalX = targetX + Math.sin(this.level2OrbitYaw) * cosP * dist;
+      const goalY = focusY + Math.sin(this.level2OrbitPitch) * dist;
+      const goalZ = targetZ + Math.cos(this.level2OrbitYaw) * cosP * dist;
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, goalX, Math.min(1, dt * 7.0));
+      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, goalY, Math.min(1, dt * 7.0));
+      this.camera.position.z = THREE.MathUtils.lerp(this.camera.position.z, goalZ, Math.min(1, dt * 7.0));
+      this.camera.lookAt(targetX, focusY, targetZ);
+    }
+
+    // Keep overhead keyLight centered on Jones
+    this.keyLight.position.set(targetX + 4, targetY + 18, targetZ + 8);
+    this.keyLight.target.position.set(targetX, targetY, targetZ);
+
+    this.pixelClock += dt;
+    this.pixelArtBlend = this.pixelArtEnabled ? 1.0 : 0.0;
+    if (this.pixelArtFlash > 0) {
+      this.pixelArtFlash = Math.max(0, this.pixelArtFlash - dt * 5.0);
+    }
+  }
+
+  public render(isHangar: boolean = false) {
+    const activeCam = this.getActiveCamera(isHangar);
     // 0.00ms overhead bypass when BOTH Pixel-Art Shader and Hangar DOF are OFF!
     if (!this.pixelArtEnabled && !this.dofEnabled) {
-      this.renderer.render(this.scene, this.camera);
+      this.renderer.render(this.scene, activeCam);
       return;
     }
 
@@ -468,7 +589,7 @@ export class SceneManager {
     this.pixelPostMat.uniforms.uFocusDist.value = this.dofFocusDist;
 
     this.renderer.setRenderTarget(activeRT);
-    this.renderer.render(this.scene, this.camera);
+    this.renderer.render(this.scene, activeCam);
     this.renderer.setRenderTarget(null);
     this.renderer.render(this.pixelPostScene, this.pixelPostCam);
   }

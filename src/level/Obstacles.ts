@@ -1956,8 +1956,8 @@ export class ObstacleManager {
       }
       obs.update(dt, time);
 
-      // Despawn if far behind camera
-      if (obs.group.position.x < playerX - 25) {
+      // Despawn only when very far behind camera (prevents Level 1 elements from vanishing if player walks back!)
+      if (obs.group.position.x < playerX - 180) {
         this.removeObstacle(obs);
         this.obstacles.splice(i, 1);
       }
@@ -1972,7 +1972,7 @@ export class ObstacleManager {
       }
       p.update(dt, time);
 
-      if (p.mesh.position.x < playerX - 25) {
+      if (p.mesh.position.x < playerX - 180) {
         this.removePickup(p);
         this.pickups.splice(i, 1);
       }
@@ -1984,8 +1984,8 @@ export class ObstacleManager {
       const e = this.enemies[i];
       e.update(dt, time, playerX, playerY, hazardPlatforms);
 
-      if (!e.active || e.position.x < playerX - 25) {
-        if (e.position.x < playerX - 25 || !e.active) {
+      if (!e.active || e.position.x < playerX - 180) {
+        if (e.position.x < playerX - 180 || !e.active) {
           e.destroy(this.scene);
         }
         this.enemies.splice(i, 1);
@@ -1998,7 +1998,7 @@ export class ObstacleManager {
       d.update(dt, time, playerX, playerY);
 
       // Only recycle attack drone when death explosion has fully finished
-      if ((!d.active && !d.isDying) || d.position.x < playerX - 35) {
+      if ((!d.active && !d.isDying) || d.position.x < playerX - 180) {
         d.destroy(this.scene);
         this.drones.splice(i, 1);
       }
@@ -2009,10 +2009,10 @@ export class ObstacleManager {
       const c = this.crates[i];
       c.update(dt, time, hazardPlatforms);
 
-      if (!c.active && c.isDestroyed && c.position.x < playerX - 30) {
+      if (!c.active && c.isDestroyed && c.position.x < playerX - 180) {
         c.destroy(this.scene);
         this.crates.splice(i, 1);
-      } else if (c.position.x < playerX - 35) {
+      } else if (c.position.x < playerX - 180) {
         c.destroy(this.scene);
         this.crates.splice(i, 1);
       }
@@ -2141,7 +2141,10 @@ export class ObstacleManager {
   /**
    * Spawns Visible High-Energy Bullet Impact Flash & Ricochet Sparks on Any Surface
    */
+  public onBulletImpact?: (x: number, y: number, color: number) => void;
+
   public spawnBulletImpact(x: number, y: number, color: number = 0x00f5ff) {
+    this.onBulletImpact?.(x, y, color);
     // 1. Expanding High-Energy Impact Shockwave Ring
     const sw = this.fxShockwaves.find(s => !s.active);
     if (sw) {

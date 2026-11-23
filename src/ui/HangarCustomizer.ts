@@ -43,6 +43,7 @@ export class HangarCustomizer {
   // Hangar Jetpack Test Hover State
   public hoverHeight: number = 0;
   private hoverVel: number = 0;
+  private wasAirborneInHangar: boolean = false;
 
   // Exposed Floor Cable Spark Pool (Single-Draw-Call GPU Points, zero per-frame allocations!)
   private static readonly SPARK_COUNT = 72;
@@ -81,7 +82,7 @@ export class HangarCustomizer {
   // Interactive Turntable Rotation State
   public isActive: boolean = false;
   public turntableAngle: number = -0.65; // Start at flattering 3/4 hero angle showing both Jones & Jetpack!
-  public autoSpinSpeed: number = 0.42;
+  public autoSpinSpeed: number = 0.78; // Brisk, smooth turntable rotation!
   private isDragging: boolean = false;
   private lastPointerX: number = 0;
 
@@ -95,11 +96,21 @@ export class HangarCustomizer {
     this.runwayComputersGroup.name = 'RunwayBlueCRTComputers';
     this.scene.add(this.runwayComputersGroup);
 
-    // 1. Pre-allocated Triple-AAA Combined Lighting (Sun Light + Dual Blue CRT Bounce Lights)
+    // 1. Pre-allocated Triple-AAA Combined Lighting (Shadow-Casting Sun Light + Dual Blue CRT Bounce Lights)
     // Intensity starts at 0 during normal gameplay -> zero light count changes!
     this.sunLight = new THREE.DirectionalLight(0xffe0aa, 0);
-    this.sunLight.position.set(6.5, 10.5, 7.5);
-    this.sunLight.target.position.set(0, GROUND_Y + 1.0, 0);
+    this.sunLight.position.set(4.5, 8.5, 5.5);
+    this.sunLight.target.position.set(0, GROUND_Y + 0.8, 0);
+    this.sunLight.castShadow = false; // Enabled strictly in Hangar Mode (tight 1024x1024 shadow frustum!)
+    this.sunLight.shadow.mapSize.set(1024, 1024);
+    this.sunLight.shadow.camera.near = 1;
+    this.sunLight.shadow.camera.far = 22;
+    this.sunLight.shadow.camera.left = -4.5;
+    this.sunLight.shadow.camera.right = 4.5;
+    this.sunLight.shadow.camera.top = 4.5;
+    this.sunLight.shadow.camera.bottom = -4.5;
+    this.sunLight.shadow.bias = -0.0005;
+    this.sunLight.shadow.normalBias = 0.02;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
@@ -189,18 +200,20 @@ export class HangarCustomizer {
       metalness: 0.35,
       roughness: 0.45
     });
-    const darkDeck = new THREE.MeshStandardMaterial({
-      color: 0x20181c,
-      metalness: 0.55,
-      roughness: 0.32
+    const lightGreenDeck = new THREE.MeshStandardMaterial({
+      color: 0x92f28a, // Crisp lighter mint-lime green cylinder standing floor (matte so real cast shadow pops!)
+      metalness: 0.04,
+      roughness: 0.78,
+      envMapIntensity: 0.24
     });
     const limeRingMat = new THREE.MeshBasicMaterial({ color: 0xa6ff38 });
     const orangeRingMat = new THREE.MeshBasicMaterial({ color: 0xff7f2a });
     const pinkRingMat = new THREE.MeshBasicMaterial({ color: 0xff6cb5 });
 
-    // Top flat standing plate (y = 0 is exact top surface so Jones's feet sit 100% flush!)
-    const topPlate = new THREE.Mesh(new THREE.CylinderGeometry(1.38, 1.44, 0.10, 40), darkDeck);
+    // Top flat standing plate (y = 0 is exact top surface so Jones's feet sit 100% flush + receives real shadow!)
+    const topPlate = new THREE.Mesh(new THREE.CylinderGeometry(1.38, 1.44, 0.10, 40), lightGreenDeck);
     topPlate.position.y = -0.05;
+    topPlate.receiveShadow = true;
     disc.add(topPlate);
 
     // Chrome inner trim ring
@@ -910,10 +923,12 @@ export class HangarCustomizer {
     this.scene.fog = null;
     this.renderer.toneMappingExposure = 1.15;
 
-    // Triple-AAA Combined Lighting: Golden Sun Light + HDRI IBL + Dual Blue CRT Bounce Lights!
-    ambientLight.intensity = 0.55;
-    keyLight.intensity = 0.35;
-    this.sunLight.intensity = 2.8;
+    // Triple-AAA Combined Lighting: Prominent Shadow-Casting Golden Sun Light + HDRI IBL + Dual Blue CRT Bounce Lights!
+    ambientLight.intensity = 0.36;
+    keyLight.intensity = 0.22;
+    keyLight.castShadow = false;
+    this.sunLight.intensity = 3.25;
+    this.sunLight.castShadow = true;
     this.crtBlueLightL.intensity = 8.5;
     this.crtBlueLightR.intensity = 8.5;
     this.runwayBlueLight.intensity = 0;
@@ -939,6 +954,7 @@ export class HangarCustomizer {
     ambientLight.intensity = 3.4;
     keyLight.intensity = 1.4;
     this.sunLight.intensity = 0;
+    this.sunLight.castShadow = false;
     this.crtBlueLightL.intensity = 0;
     this.crtBlueLightR.intensity = 0;
     this.runwayBlueLight.intensity = 5.5;
@@ -976,21 +992,28 @@ export class HangarCustomizer {
       this.turntableDisc.rotation.y = this.turntableAngle;
 
       // Controlled low hover (+0.82m above disc) when jetpack is held; smooth drop back to idle on release!
-      const prevHover = this.hoverHeight;
       if (isJetpackHovering) {
+        this.wasAirborneInHangar = true;
         const targetH = 0.82 + Math.sin(totalTime * 4.2) * 0.045;
         this.hoverHeight = THREE.MathUtils.lerp(this.hoverHeight, targetH, Math.min(1, dt * 6.5));
         this.hoverVel = 0;
       } else if (this.hoverHeight > 0.001) {
+        this.wasAirborneInHangar = true;
         this.hoverVel -= 14.0 * dt;
         const impactVel = Math.abs(this.hoverVel);
         this.hoverHeight = Math.max(0, this.hoverHeight + this.hoverVel * dt);
-        if (this.hoverHeight === 0) {
+        if (this.hoverHeight <= 0.001) {
+          this.hoverHeight = 0;
           this.hoverVel = 0;
-          if (prevHover > 0.02) {
-            this.onLand?.(THREE.MathUtils.clamp(impactVel / 6.5, 0.58, 1.0));
+          if (this.wasAirborneInHangar) {
+            this.wasAirborneInHangar = false;
+            this.onLand?.(THREE.MathUtils.clamp(impactVel / 6.0, 0.68, 1.0));
           }
         }
+      } else if (this.wasAirborneInHangar) {
+        // Fallback guarantee: if hover was tapped briefly, ALWAYS play landing SFX on touchdown!
+        this.wasAirborneInHangar = false;
+        this.onLand?.(0.72);
       }
 
       if (playerGroup) {
